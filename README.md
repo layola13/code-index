@@ -53,8 +53,10 @@ bun run plugin:install
 That script runs:
 
 ```bash
-codex plugin marketplace add .
+codex plugin marketplace add ..
 ```
+
+这里传的是仓库根目录，不是 `.agents/plugins` 目录本身。Codex 会在这个根目录下自动查找 `.agents/plugins/marketplace.json`。
 
 This repository is set up as a local plugin under:
 
