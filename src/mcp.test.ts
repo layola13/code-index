@@ -90,4 +90,151 @@ describe('mcp server', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('passes source strategy kinds to build-index', async () => {
+    const root = await createTempRepo({
+      'bundle.js': [
+        '/******/ (() => { // webpackBootstrap',
+        '/******/  var __webpack_modules__ = {};',
+        '/******/  __webpack_require__.d = (exports, definition) => {};',
+        '/******/  class BundledValue { value() { return 1 } }',
+        '/******/ })();',
+        '',
+      ].join('\n'),
+    })
+
+    const transport = new StdioClientTransport({
+      command: 'bun',
+      args: ['run', 'src/mcp.ts'],
+      cwd: process.cwd(),
+      stderr: 'pipe',
+    })
+    const client = new Client({
+      name: 'code-index-test',
+      version: '0.0.0',
+    })
+
+    try {
+      await client.connect(transport)
+
+      const result = await client.callTool({
+        name: 'build-index',
+        arguments: {
+          rootDir: root,
+          sourceStrategyKinds: ['webpack'],
+        },
+      })
+
+      const parsed = parseToolResult<{
+        result: { manifest: { moduleCount: number } }
+      }>(result)
+
+      expect(parsed.result.manifest.moduleCount).toBe(1)
+    } finally {
+      await client.close()
+      await transport.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('passes source strategy plugin manifests to build-index', async () => {
+    const root = await createTempRepo({
+      'bundle.js': [
+        '/* __external_bundle__ */',
+        "console.log('external bundle')",
+        '',
+      ].join('\n'),
+    })
+    const pluginRoot = await mkdtemp(join(tmpdir(), 'code-index-mcp-plugin-'))
+    await mkdir(join(pluginRoot, '.codex-plugin'), { recursive: true })
+    await writeFile(
+      join(pluginRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify(
+        {
+          name: 'mcp-external-bundle-plugin',
+          version: '0.0.0',
+          sourceStrategyPluginEntry: './index.ts',
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(
+      join(pluginRoot, 'index.ts'),
+      [
+        "export function getSourceStrategyPlugins() {",
+        "  return [{",
+        "    kind: 'external-bundle',",
+        "    detect({ headText, tailText, hasSourceMapComment }) {",
+        "      if (hasSourceMapComment) return null",
+        "      return `${headText}\\n${tailText}`.includes('__external_bundle__')",
+        "        ? { kind: 'external-bundle', confidence: 1, reason: 'external marker' }",
+        "        : null",
+        "    },",
+        "    async expand({ file, tempRootDir }) {",
+        "      const { mkdir, writeFile } = await import('fs/promises')",
+        "      const { join } = await import('path')",
+        "      const tempPath = join(tempRootDir, 'external-bundle', 'chunks', 'external.js')",
+        "      await mkdir(join(tempRootDir, 'external-bundle', 'chunks'), { recursive: true })",
+        "      await writeFile(tempPath, 'export const externalValue = 123\\n', 'utf8')",
+        "      return {",
+        "        cleanupPaths: [join(tempRootDir, 'external-bundle')],",
+        "        units: [{",
+        "          file: {",
+        "            absolutePath: tempPath,",
+        "            relativePath: 'chunks/external.js',",
+        "            language: file.language,",
+        "            originPath: file.relativePath,",
+        "            originStartLine: 1,",
+        "            originStartCharacter: 1,",
+        "          },",
+        "          originFile: file,",
+        "          fingerprintPath: tempPath,",
+        "          strategyKind: 'external-bundle',",
+        "        }],",
+        "      }",
+        "    },",
+        "  }]",
+        "}",
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const transport = new StdioClientTransport({
+      command: 'bun',
+      args: ['run', 'src/mcp.ts'],
+      cwd: process.cwd(),
+      stderr: 'pipe',
+    })
+    const client = new Client({
+      name: 'code-index-test',
+      version: '0.0.0',
+    })
+
+    try {
+      await client.connect(transport)
+
+      const result = await client.callTool({
+        name: 'build-index',
+        arguments: {
+          rootDir: root,
+          sourceStrategyKinds: ['external-bundle'],
+          sourceStrategyPluginManifests: [join(pluginRoot, '.codex-plugin', 'plugin.json')],
+        },
+      })
+
+      const parsed = parseToolResult<{
+        result: { manifest: { moduleCount: number } }
+      }>(result)
+
+      expect(parsed.result.manifest.moduleCount).toBe(1)
+    } finally {
+      await client.close()
+      await transport.close()
+      await rm(root, { recursive: true, force: true })
+      await rm(pluginRoot, { recursive: true, force: true })
+    }
+  })
 })

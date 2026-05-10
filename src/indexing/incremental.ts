@@ -1,13 +1,14 @@
-import { mkdir, readFile, rename, stat, writeFile } from 'fs/promises'
+import { createHash } from 'crypto'
+import { mkdir, readFile, rename, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import type { ModuleIR } from './ir.js'
+import type { LoadedSource } from './source.js'
 
-const MODULE_CACHE_VERSION = 1
+const MODULE_CACHE_VERSION = 2
 const MODULE_CACHE_FILENAME = 'module-cache.v1.json'
 
 export type ModuleCacheFingerprint = {
-  mtimeMs: number
-  size: number
+  signature: string
 }
 
 type SerializedModuleCache = {
@@ -31,14 +32,25 @@ function cachePath(outputDir: string): string {
   return join(outputDir, MODULE_CACHE_FILENAME)
 }
 
+function hashText(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+export function fingerprintLoadedSource(
+  source: LoadedSource,
+): ModuleCacheFingerprint {
+  return {
+    signature: `${source.byteSize}:${hashText(source.text)}`,
+  }
+}
+
 export async function fingerprintSourceFile(
   absolutePath: string,
 ): Promise<ModuleCacheFingerprint | null> {
   try {
-    const fileStat = await stat(absolutePath)
+    const text = await readFile(absolutePath, 'utf8')
     return {
-      mtimeMs: Math.trunc(fileStat.mtimeMs),
-      size: fileStat.size,
+      signature: `${Buffer.byteLength(text, 'utf8')}:${hashText(text)}`,
     }
   } catch {
     return null
@@ -49,9 +61,7 @@ export function fingerprintsEqual(
   left: ModuleCacheFingerprint | null | undefined,
   right: ModuleCacheFingerprint | null | undefined,
 ): boolean {
-  return (
-    left?.size === right?.size && left?.mtimeMs === right?.mtimeMs
-  )
+  return left?.signature === right?.signature
 }
 
 export async function loadModuleCache(args: {

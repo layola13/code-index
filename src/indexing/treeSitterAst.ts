@@ -910,6 +910,7 @@ function parseTsJsModule(args: {
       maxFileBytes: args.sourceText.length,
       parseWorkers: 1,
       ignoredDirNames: new Set<string>(),
+      sourceStrategyKinds: new Set<string>(),
     },
     file: {
       absolutePath: args.filePath,
@@ -2606,6 +2607,7 @@ function parseGenericAstFallback(args: {
         maxFileBytes: args.sourceText.length,
         parseWorkers: 1,
         ignoredDirNames: new Set<string>(),
+        sourceStrategyKinds: new Set<string>(),
       },
       file: {
         absolutePath: args.filePath,
@@ -2818,6 +2820,7 @@ export function parseAstModule(args: {
             maxFileBytes: args.sourceText.length,
             parseWorkers: 1,
             ignoredDirNames: new Set<string>(),
+            sourceStrategyKinds: new Set<string>(),
           },
           file: {
             absolutePath: args.filePath,
@@ -2844,6 +2847,7 @@ export function parseAstModule(args: {
             maxFileBytes: args.sourceText.length,
             parseWorkers: 1,
             ignoredDirNames: new Set<string>(),
+            sourceStrategyKinds: new Set<string>(),
           },
           file: {
             absolutePath: args.filePath,

@@ -6,7 +6,7 @@ import { parseAstModule } from './treeSitterAst.js'
 import { parseGenericModule } from './parsers/generic.js'
 import { parsePythonModule } from './parsers/python.js'
 import { parseTypeScriptLikeModule } from './parsers/typescriptLike.js'
-import { readSourceText } from './source.js'
+import { readSourceText, type LoadedSource } from './source.js'
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -31,6 +31,9 @@ function buildReadErrorModule(file: DiscoveredSourceFile): ModuleIR {
     moduleId: relativePathToModuleId(file.relativePath),
     sourcePath: file.absolutePath,
     relativePath: file.relativePath,
+    originPath: file.originPath,
+    originStartLine: file.originStartLine,
+    originStartCharacter: file.originStartCharacter,
     language: file.language,
     parseMode: 'read-error',
     imports: [],
@@ -54,6 +57,7 @@ function createParserConfig(maxFileBytes: number): CodeIndexConfig {
     maxFileBytes,
     parseWorkers: 1,
     ignoredDirNames: new Set<string>(),
+    sourceStrategyKinds: new Set<string>(),
   }
 }
 
@@ -81,6 +85,11 @@ function parseModule(context: {
       moduleId: relativePathToModuleId(context.file.relativePath),
       sourcePath: context.file.absolutePath,
       relativePath: context.file.relativePath,
+      originPath: context.source.originPath ?? context.file.originPath,
+      originStartLine:
+        context.source.originStartLine ?? context.file.originStartLine,
+      originStartCharacter:
+        context.source.originStartCharacter ?? context.file.originStartCharacter,
       language: astResult.language ?? context.file.language,
       parseMode: context.source.truncated ? 'ast-truncated' : 'ast-tree-sitter',
       imports: astResult.imports,
@@ -124,6 +133,7 @@ function parseModule(context: {
 
 export type BuiltinParseRequest = {
   file: DiscoveredSourceFile
+  source?: LoadedSource
   maxFileBytes: number
 }
 
@@ -132,13 +142,17 @@ export async function parseModuleWithBuiltinParsers(
 ): Promise<ModuleIR> {
   const config = createParserConfig(args.maxFileBytes)
 
-  let source
-  try {
-    source = await readSourceText(args.file.absolutePath, config.maxFileBytes)
-  } catch (error) {
-    const failedModule = buildReadErrorModule(args.file)
-    failedModule.errors = [`read error: ${describeError(error)}`]
-    return failedModule
+  let source: LoadedSource
+  if (args.source) {
+    source = args.source
+  } else {
+    try {
+      source = await readSourceText(args.file.absolutePath, config.maxFileBytes)
+    } catch (error) {
+      const failedModule = buildReadErrorModule(args.file)
+      failedModule.errors = [`read error: ${describeError(error)}`]
+      return failedModule
+    }
   }
 
   try {
@@ -177,6 +191,11 @@ export async function parseModuleWithBuiltinParsers(
     fallbackModule.parseMode = source.truncated
       ? `fallback-${args.file.language}-truncated`
       : `fallback-${args.file.language}`
+    fallbackModule.originPath = source.originPath ?? args.file.originPath
+    fallbackModule.originStartLine =
+      source.originStartLine ?? args.file.originStartLine
+    fallbackModule.originStartCharacter =
+      source.originStartCharacter ?? args.file.originStartCharacter
     fallbackModule.errors = dedupeStrings([
       ...fallbackModule.errors,
       `parse error: ${parseError}`,

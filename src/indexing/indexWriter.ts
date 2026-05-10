@@ -512,12 +512,15 @@ export async function writeIndexFiles(args: {
   )
 
   const moduleLines = args.modules.map(module =>
-    JSON.stringify({
-      module_id: module.moduleId,
-      path: module.relativePath,
-      lang: module.language,
-      imports_count: module.imports.length,
-      classes_count: module.classes.length,
+      JSON.stringify({
+        module_id: module.moduleId,
+        path: module.relativePath,
+        origin_path: module.originPath,
+        origin_start_character: module.originStartCharacter,
+        origin_start_line: module.originStartLine,
+        lang: module.language,
+        imports_count: module.imports.length,
+        classes_count: module.classes.length,
       functions_count: module.functions.length,
       methods_count: module.classes.reduce(
         (count, cls) => count + cls.methods.length,

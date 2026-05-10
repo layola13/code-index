@@ -59,6 +59,9 @@ export type ModuleIR = {
   moduleId: string
   sourcePath: string
   relativePath: string
+  originPath?: string
+  originStartCharacter?: number
+  originStartLine?: number
   language: string
   parseMode: string
   imports: string[]

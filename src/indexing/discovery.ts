@@ -10,6 +10,9 @@ export type DiscoveredSourceFile = {
   absolutePath: string
   relativePath: string
   language: CodeLanguage
+  originPath?: string
+  originStartLine?: number
+  originStartCharacter?: number
 }
 
 export type DiscoverSourceFilesResult = {

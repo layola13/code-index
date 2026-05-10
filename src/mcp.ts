@@ -90,6 +90,16 @@ const TOOLS: ToolDefinition[] = [
           items: { type: 'string' },
           description: 'Additional directory names to ignore during discovery',
         },
+        sourceStrategyKinds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional source strategy kinds to enable, such as webpack, esbuild, vite, or minified-js',
+        },
+        sourceStrategyPluginManifests: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional source strategy plugin manifest paths to load before indexing',
+        },
       },
       additionalProperties: false,
     },
@@ -257,6 +267,8 @@ async function handleBuildIndex(args: unknown): Promise<CallToolResult> {
     maxFileBytes: getNumberArg(args, 'maxFileBytes'),
     workers: getNumberArg(args, 'workers'),
     ignoredDirNames: getStringArrayArg(args, 'ignoredDirNames'),
+    sourceStrategyPluginManifests: getStringArrayArg(args, 'sourceStrategyPluginManifests'),
+    sourceStrategyKinds: getStringArrayArg(args, 'sourceStrategyKinds'),
   })
 
   return jsonResult({

@@ -127,6 +127,18 @@ export function computeLineStarts(text: string): number[] {
   return lineStarts
 }
 
+export function offsetToColumn(text: string, offset: number): number {
+  let cursor = Math.max(0, Math.min(text.length, offset))
+  while (cursor > 0) {
+    const char = text.charCodeAt(cursor - 1)
+    if (char === 10) {
+      break
+    }
+    cursor--
+  }
+  return Math.max(1, offset - cursor + 1)
+}
+
 export function offsetToLine(lineStarts: readonly number[], offset: number): number {
   let low = 0
   let high = lineStarts.length - 1

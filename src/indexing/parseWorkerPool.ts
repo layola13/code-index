@@ -6,6 +6,7 @@ import type { DiscoveredSourceFile } from './discovery.js'
 import type { ModuleIR } from './ir.js'
 import type { BuiltinParseRequest } from './parseBuiltin.js'
 import { parseModuleWithBuiltinParsers } from './parseBuiltin.js'
+import type { LoadedSource } from './source.js'
 
 type ParseWorkerResponse =
   | {
@@ -128,6 +129,7 @@ class ParseWorkerClient {
 export async function parseModulesWithWorkerPool(args: {
   files: readonly DiscoveredSourceFile[]
   maxFileBytes: number
+  sources?: ReadonlyMap<string, LoadedSource | undefined>
   onParsed?: () => void | Promise<void>
   workerCount: number
 }): Promise<ModuleIR[]> {
@@ -138,9 +140,11 @@ export async function parseModulesWithWorkerPool(args: {
   if (typeof process.versions.bun === 'string') {
     const modules: ModuleIR[] = []
     for (const file of args.files) {
+      const source = args.sources?.get(file.relativePath)
       modules.push(
         await parseModuleWithBuiltinParsers({
           file,
+          source,
           maxFileBytes: args.maxFileBytes,
         }),
       )
@@ -166,6 +170,7 @@ export async function parseModulesWithWorkerPool(args: {
 
           results[currentIndex] = await worker.parse({
             file: args.files[currentIndex]!,
+            source: args.sources?.get(args.files[currentIndex]!.relativePath),
             maxFileBytes: args.maxFileBytes,
           })
           await args.onParsed?.()

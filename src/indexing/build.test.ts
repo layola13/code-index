@@ -6,6 +6,205 @@ import { join } from "path";
 import { buildCodeIndex } from "./build.js";
 import { formatCountSummary } from "./indexWriter.js";
 import type { CodeIndexBuildProgress } from "./progress.js";
+import webpack from "webpack";
+import { build as esbuildBuild } from "esbuild";
+import { build as viteBuild } from "vite";
+import { minify } from "terser";
+
+async function buildWebpackFixture(args: {
+  rootDir: string;
+  entryRelativePath: string;
+  bundlePath: string;
+  sourcemap?: boolean;
+}): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    webpack(
+      {
+        mode: "development",
+        entry: join(args.rootDir, args.entryRelativePath),
+        output: {
+          path: args.rootDir,
+          filename: args.bundlePath,
+        },
+        devtool: args.sourcemap ? "source-map" : false,
+        target: "web",
+        optimization: {
+          minimize: false,
+        },
+      },
+      (error, stats) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (stats?.hasErrors()) {
+          reject(new Error(stats.toString({ colors: false })));
+          return;
+        }
+        resolve();
+      },
+    );
+  });
+}
+
+async function buildEsbuildFixture(args: {
+  rootDir: string;
+  entryRelativePath: string;
+  bundlePath: string;
+  format?: "iife" | "cjs";
+  sourcemap?: boolean;
+}): Promise<void> {
+  await esbuildBuild({
+    entryPoints: [join(args.rootDir, args.entryRelativePath)],
+    bundle: true,
+    sourcemap: args.sourcemap ?? false,
+    outfile: join(args.rootDir, args.bundlePath),
+    format: args.format ?? "iife",
+    platform: args.format === "cjs" ? "node" : "browser",
+    write: true,
+    logLevel: "silent",
+  });
+}
+
+async function buildViteFixture(args: {
+  rootDir: string;
+  entryRelativePath: string;
+  lazyRelativePath?: string;
+  sourcemap?: boolean;
+}): Promise<{ bundleFilePath: string; assetFiles: string[] }> {
+  const htmlPath = join(args.rootDir, "index.html");
+  await writeFile(
+    htmlPath,
+    `<!doctype html><html><body><script type="module" src="/${args.entryRelativePath}"></script></body></html>`,
+    "utf8",
+  );
+
+  await viteBuild({
+    root: args.rootDir,
+    build: {
+      outDir: "bundle-out",
+      emptyOutDir: true,
+      sourcemap: args.sourcemap ?? false,
+      rollupOptions: {
+        input: htmlPath,
+      },
+    },
+  });
+
+  const assetsDir = join(args.rootDir, "bundle-out", "assets");
+  const { readdir } = await import("fs/promises");
+  const assetFiles = await readdir(assetsDir);
+  const bundleFile = assetFiles.find(
+    (name) => name.endsWith(".js") && name.startsWith("index-"),
+  );
+  if (!bundleFile) {
+    throw new Error("failed to locate vite bundle");
+  }
+
+  return {
+    bundleFilePath: join(assetsDir, bundleFile),
+    assetFiles,
+  };
+}
+
+async function buildTerserFixture(args: {
+  rootDir: string;
+  sourceRelativePath: string;
+  bundleRelativePath: string;
+  sourcemap?: boolean;
+}): Promise<void> {
+  const source = await readFile(join(args.rootDir, args.sourceRelativePath), "utf8");
+  const result = await minify(
+    { [args.sourceRelativePath]: source },
+    args.sourcemap
+      ? {
+          sourceMap: {
+            filename: args.bundleRelativePath,
+            url: `${args.bundleRelativePath}.map`,
+            includeSources: true,
+          },
+        }
+      : undefined,
+  );
+  if (!result.code) {
+    throw new Error("terser failed to produce code");
+  }
+  await writeFile(join(args.rootDir, args.bundleRelativePath), `${result.code}\n`, "utf8");
+  if (args.sourcemap) {
+    if (!result.map) {
+      throw new Error("terser failed to produce source map");
+    }
+    await writeFile(join(args.rootDir, `${args.bundleRelativePath}.map`), result.map, "utf8");
+  }
+}
+
+async function createExternalBundleStrategyPluginPackage(): Promise<{
+  manifestPath: string;
+  pluginRoot: string;
+}> {
+  const pluginRoot = await mkdtemp(join(tmpdir(), "claude-code-index-external-plugin-"));
+  await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, ".codex-plugin", "plugin.json"),
+    JSON.stringify(
+      {
+        name: "external-bundle-plugin",
+        version: "0.0.0",
+        sourceStrategyPluginEntry: "./index.ts",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    join(pluginRoot, "index.ts"),
+    [
+      "",
+      "export function getSourceStrategyPlugins() {",
+      "  return [{",
+      "    kind: 'external-bundle',",
+      "    detect({ headText, tailText, hasSourceMapComment }) {",
+      "      if (hasSourceMapComment) return null",
+      "      const text = `${headText}\\n${tailText}`",
+      "      return text.includes('__external_bundle__')",
+      "        ? { kind: 'external-bundle', confidence: 1, reason: 'external marker' }",
+      "        : null",
+      "    },",
+      "    async expand({ file, tempRootDir }) {",
+      "      const { mkdir, writeFile } = await import('fs/promises')",
+      "      const { join } = await import('path')",
+      "      const tempPath = join(tempRootDir, 'external-bundle', 'chunks', 'external.js')",
+      "      await mkdir(join(tempRootDir, 'external-bundle', 'chunks'), { recursive: true })",
+      "      await writeFile(tempPath, 'export function externalValue() { return 123 }\\n', 'utf8')",
+      "      return {",
+      "        cleanupPaths: [join(tempRootDir, 'external-bundle')],",
+      "        units: [{",
+      "          file: {",
+      "            absolutePath: tempPath,",
+      "            relativePath: 'chunks/external.js',",
+      "            language: file.language,",
+      "            originPath: file.relativePath,",
+      "            originStartLine: 1,",
+      "            originStartCharacter: 1,",
+      "          },",
+      "          originFile: file,",
+      "          fingerprintPath: tempPath,",
+      "          strategyKind: 'external-bundle',",
+      "        }],",
+      "      }",
+      "    },",
+      "  }]",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  )
+  return {
+    manifestPath: join(pluginRoot, ".codex-plugin", "plugin.json"),
+    pluginRoot,
+  }
+}
 
 describe("buildCodeIndex", () => {
   it("emits skeleton, json indexes, dot map, and skills for ts and python inputs", async () => {
@@ -809,6 +1008,382 @@ public:
       expect(progress.at(-1)?.phase).toBe("complete");
     } finally {
       await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips bundle output when no source strategy is enabled and indexes raw sources normally", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-strategy-skip-"));
+
+    try {
+      await writeFile(
+        join(rootDir, "raw.ts"),
+        `export function rawValue(): number {
+  return 1
+}
+`,
+        "utf8",
+      );
+
+      await mkdir(join(rootDir, "bundle-src"), { recursive: true });
+      await writeFile(
+        join(rootDir, "bundle-src", "entry.js"),
+        `import {value} from './value.js'
+console.log(value)
+`,
+        "utf8",
+      );
+      await writeFile(
+        join(rootDir, "bundle-src", "value.js"),
+        `export const value = 2
+`,
+        "utf8",
+      );
+      await buildWebpackFixture({
+        rootDir,
+        entryRelativePath: "bundle-src/entry.js",
+        bundlePath: "bundle.js",
+        sourcemap: false,
+      });
+      await rm(join(rootDir, "bundle-src"), { recursive: true, force: true });
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+      });
+
+      expect(result.manifest.moduleCount).toBe(1);
+      expect(result.manifest.parseModes["ast-tree-sitter"] ?? 0).toBe(1);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl).toContain("raw.ts");
+      expect(modulesJsonl).not.toContain("bundle-src/entry.js");
+      expect(modulesJsonl).not.toContain("bundle.js");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands bundle sources when the matching strategy is enabled", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-strategy-expand-"));
+
+    try {
+      await mkdir(join(rootDir, "bundle-src"), { recursive: true });
+      await writeFile(
+        join(rootDir, "bundle-src", "entry.js"),
+        `export class BundleThing {
+  value() {
+    return 42
+  }
+}
+console.log(new BundleThing().value())
+`,
+        "utf8",
+      );
+      await writeFile(
+        join(rootDir, "bundle-src", "value.js"),
+        `export const value = 42
+`,
+        "utf8",
+      );
+      await buildWebpackFixture({
+        rootDir,
+        entryRelativePath: "bundle-src/entry.js",
+        bundlePath: "bundle.js",
+      });
+      await rm(join(rootDir, "bundle-src"), { recursive: true, force: true });
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+        sourceStrategyKinds: ["webpack"],
+      });
+
+      expect(result.manifest.moduleCount).toBe(1);
+      expect(result.manifest.classCount).toBe(1);
+      expect(result.manifest.parseModes["ast-tree-sitter"] ?? 0).toBe(1);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl).toContain('"origin_path":"bundle.js"');
+      expect(modulesJsonl).toContain('"path":"chunks/bundle-001.js"');
+
+      const skeleton = await readFile(
+        join(rootDir, ".code_index", "skeleton", "chunks", "bundle-001.py"),
+        "utf8",
+      );
+      expect(skeleton).toContain("class BundleThing:");
+      expect(skeleton).toContain("def value(");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands real esbuild output when the esbuild strategy is enabled", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-esbuild-"));
+
+    try {
+      await mkdir(join(rootDir, "bundle-src"), { recursive: true });
+      await writeFile(
+        join(rootDir, "bundle-src", "entry.js"),
+        `import {value} from './value.js'
+console.log(value)
+`,
+        "utf8",
+      );
+      await writeFile(
+        join(rootDir, "bundle-src", "value.js"),
+        `export const value = 42
+`,
+        "utf8",
+      );
+      await buildEsbuildFixture({
+        rootDir,
+        entryRelativePath: "bundle-src/entry.js",
+        bundlePath: "bundle.js",
+        sourcemap: false,
+      });
+      await rm(join(rootDir, "bundle-src"), { recursive: true, force: true });
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+        sourceStrategyKinds: ["esbuild"],
+      });
+
+      expect(result.manifest.moduleCount).toBe(2);
+      expect(result.manifest.parseModes["ast-tree-sitter"] ?? 0).toBe(2);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl).toContain('"origin_path":"bundle.js"');
+      expect(modulesJsonl).toContain('"path":"src/value.js"');
+      expect(modulesJsonl).toContain('"path":"src/entry.js"');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands real terser output when the minified-js strategy is enabled", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-terser-"));
+
+    try {
+      await mkdir(join(rootDir, "bundle-src"), { recursive: true });
+      await writeFile(
+        join(rootDir, "bundle-src", "entry.js"),
+        `function hello(name) {
+  return 'hi ' + name
+}
+console.log(hello('world'))
+`,
+        "utf8",
+      );
+      await buildTerserFixture({
+        rootDir,
+        sourceRelativePath: "bundle-src/entry.js",
+        bundleRelativePath: "bundle.js",
+        sourcemap: false,
+      });
+      await rm(join(rootDir, "bundle-src"), { recursive: true, force: true });
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+        sourceStrategyKinds: ["minified-js"],
+      });
+
+      expect(result.manifest.moduleCount).toBe(2);
+      expect(result.manifest.parseModes["ast-tree-sitter"] ?? 0).toBe(2);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl).toContain('"origin_path":"bundle.js"');
+      expect(modulesJsonl).toContain('"path":"chunks/bundle-001.js"');
+      expect(modulesJsonl).toContain('"path":"chunks/bundle-002.js"');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands real vite output when the vite strategy is enabled", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-vite-"));
+
+    try {
+      await mkdir(join(rootDir, "app"), { recursive: true });
+      await writeFile(
+        join(rootDir, "app", "main.js"),
+        `import('./lazy.js').then(m => console.log(m.value))
+`,
+        "utf8",
+      );
+      await writeFile(
+        join(rootDir, "app", "lazy.js"),
+        `export const value = 42
+`,
+        "utf8",
+      );
+      const { bundleFilePath, assetFiles } = await buildViteFixture({
+        rootDir,
+        entryRelativePath: "app/main.js",
+        sourcemap: false,
+      });
+      expect(bundleFilePath).toContain("bundle-out/assets/index-");
+      expect(assetFiles.some((name) => name.startsWith("lazy-") && name.endsWith(".js"))).toBe(true);
+      await rm(join(rootDir, "app"), { recursive: true, force: true });
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+        sourceStrategyKinds: ["vite"],
+      });
+
+      expect(result.manifest.moduleCount).toBe(0);
+      expect(result.manifest.parseModes["ast-tree-sitter"] ?? 0).toBe(0);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl.trim()).toBe("");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips bundle output that carries a sourcemap even when a strategy is enabled", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-sourcemap-skip-"));
+
+    try {
+      await mkdir(join(rootDir, "bundle-src"), { recursive: true });
+      await writeFile(
+        join(rootDir, "bundle-src", "entry.js"),
+        `import {value} from './value.js'
+console.log(value)
+`,
+        "utf8",
+      );
+      await writeFile(
+        join(rootDir, "bundle-src", "value.js"),
+        `export const value = 42
+`,
+        "utf8",
+      );
+      await buildWebpackFixture({
+        rootDir,
+        entryRelativePath: "bundle-src/entry.js",
+        bundlePath: "bundle.js",
+        sourcemap: true,
+      });
+      await rm(join(rootDir, "bundle-src"), { recursive: true, force: true });
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+        sourceStrategyKinds: ["webpack"],
+      });
+
+      expect(result.manifest.moduleCount).toBe(0);
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl.trim()).toBe("");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands third-party minified js without sourcemaps using the first 1000 chars", async () => {
+    const rootDir = await mkdtemp(
+      join(tmpdir(), "claude-code-index-thirdparty-minified-"),
+    );
+
+    try {
+      const distHead = (
+        await readFile(join(process.cwd(), "dist", "augment.mjs"), "utf8")
+      ).slice(0, 1000);
+
+      await mkdir(join(rootDir, "bundle"), { recursive: true });
+      await writeFile(join(rootDir, "bundle", "augment.mjs"), distHead, "utf8");
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+      });
+
+      expect(result.manifest.moduleCount).toBeGreaterThan(0);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl).toContain('"path":"chunks/augment-001.js"');
+
+      const chunkSkeletonDir = join(
+        rootDir,
+        ".code_index",
+        "skeleton",
+        "chunks",
+      );
+      expect(existsSync(chunkSkeletonDir)).toBe(true);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads and applies an external source strategy plugin manifest", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-external-plugin-"));
+    let pluginRoot: string | undefined;
+
+    try {
+      const created = await createExternalBundleStrategyPluginPackage();
+      const { manifestPath } = created;
+      pluginRoot = created.pluginRoot;
+
+      await writeFile(
+        join(rootDir, "bundle.js"),
+        [
+          "/* __external_bundle__ */",
+          "console.log('external bundle')",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        sourceStrategyKinds: ["external-bundle"],
+        sourceStrategyPluginManifests: [manifestPath],
+      });
+
+      expect(result.manifest.moduleCount).toBe(1);
+
+      const modulesJsonl = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesJsonl).toContain('"path":"chunks/external.js"');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+      if (pluginRoot) {
+        await rm(pluginRoot, { recursive: true, force: true });
+      }
     }
   });
 });

@@ -16,6 +16,8 @@ export function formatStartupIndexProgress(
   switch (progress.phase) {
     case 'discover':
       return `Indexing project: ${progress.message}${ratio}`
+    case 'expand':
+      return `Indexing project: ${progress.message}${ratio}`
     case 'parse':
       return `Indexing project: ${progress.message}${ratio}`
     case 'emit':

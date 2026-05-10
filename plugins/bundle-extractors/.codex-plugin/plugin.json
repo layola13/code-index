@@ -1,0 +1,29 @@
+{
+  "name": "bundle-extractors",
+  "version": "0.1.0",
+  "description": "Independent source strategy plugin package for bundle detection, decomposition, and indexing.",
+  "sourceStrategyPluginEntries": [
+    "./raw.ts",
+    "./webpack.ts",
+    "./esbuild.ts",
+    "./vite.ts",
+    "./minified-js.ts"
+  ],
+  "interface": {
+    "displayName": "Bundle Extractors",
+    "shortDescription": "Detect, split, and index bundle-like JavaScript inputs.",
+    "longDescription": "A Codex plugin package that supplies webpack, esbuild, vite, and minified-js source strategy plugins to the code-index host.",
+    "developerName": "Codex",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/openai/codex",
+    "defaultPrompt": [
+      "Load the bundle extractor plugin package.",
+      "Use it to detect bundle-like JavaScript files.",
+      "Split bundle chunks before indexing."
+    ]
+  }
+}

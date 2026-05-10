@@ -6,7 +6,7 @@ import { startMcpServer } from './mcp.js'
 import { errorMessage } from './utils/errors.js'
 
 const USAGE = [
-  'Usage: code-index [build] [path] [--output DIR] [--max-file-bytes N] [--max-files N] [--workers N] [--ignore-dir NAME]',
+  'Usage: code-index [build] [path] [--output DIR] [--max-file-bytes N] [--max-files N] [--workers N] [--ignore-dir NAME] [--source-strategy KIND] [--source-strategy-plugin-manifest PATH]',
   '       code-index mcp',
   '',
   'Examples:',
@@ -80,6 +80,8 @@ async function runBuildCommand(args: string): Promise<number> {
     maxFileBytes: parsed.maxFileBytes,
     outputDir: parsed.outputDir,
     rootDir: parsed.rootDir,
+    sourceStrategyPluginManifests: parsed.sourceStrategyPluginManifests,
+    sourceStrategyKinds: parsed.sourceStrategyKinds,
     workers: parsed.workers,
     onProgress(progress) {
       if (process.stderr.isTTY) {

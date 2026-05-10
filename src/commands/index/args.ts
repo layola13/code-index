@@ -13,6 +13,8 @@ export type ParsedIndexArgs =
       maxFileBytes?: number
       outputDir?: string
       rootDir: string
+      sourceStrategyPluginManifests?: string[]
+      sourceStrategyKinds?: string[]
       workers?: number
     }
 
@@ -77,6 +79,8 @@ export function parseIndexArgs(input: string): ParsedIndexArgs {
   let maxFiles: number | undefined
   let outputDir: string | undefined
   let maxFileBytes: number | undefined
+  const sourceStrategyPluginManifests: string[] = []
+  const sourceStrategyKinds: string[] = []
   let workers: number | undefined
 
   for (let index = 0; index < tokens.length; index++) {
@@ -202,6 +206,58 @@ export function parseIndexArgs(input: string): ParsedIndexArgs {
       continue
     }
 
+    if (token.startsWith('--source-strategy=')) {
+      const strategy = token.slice('--source-strategy='.length).trim()
+      if (!strategy) {
+        return {
+          kind: 'error',
+          message: 'Missing value for --source-strategy.',
+        }
+      }
+      sourceStrategyKinds.push(strategy)
+      continue
+    }
+
+    if (token.startsWith('--source-strategy-plugin-manifest=')) {
+      const manifestPath = token
+        .slice('--source-strategy-plugin-manifest='.length)
+        .trim()
+      if (!manifestPath) {
+        return {
+          kind: 'error',
+          message: 'Missing value for --source-strategy-plugin-manifest.',
+        }
+      }
+      sourceStrategyPluginManifests.push(manifestPath)
+      continue
+    }
+
+    if (token === '--source-strategy') {
+      const strategy = tokens[index + 1]?.trim()
+      if (!strategy) {
+        return {
+          kind: 'error',
+          message: 'Missing value for --source-strategy.',
+        }
+      }
+      sourceStrategyKinds.push(strategy)
+      index++
+      continue
+    }
+
+    if (token === '--source-strategy-plugin-manifest') {
+      const manifestPath = tokens[index + 1]?.trim()
+      if (!manifestPath) {
+        return {
+          kind: 'error',
+          message: 'Missing value for --source-strategy-plugin-manifest.',
+        }
+      }
+      sourceStrategyPluginManifests.push(manifestPath)
+      index++
+      continue
+    }
+
     if (token === '--ignore-dir') {
       const ignoredDir = tokens[index + 1]?.trim()
       if (!ignoredDir) {
@@ -236,6 +292,11 @@ export function parseIndexArgs(input: string): ParsedIndexArgs {
     maxFileBytes,
     outputDir,
     rootDir,
+    sourceStrategyPluginManifests:
+      sourceStrategyPluginManifests.length > 0
+        ? sourceStrategyPluginManifests
+        : undefined,
+    sourceStrategyKinds: sourceStrategyKinds.length > 0 ? sourceStrategyKinds : undefined,
     workers,
   }
 }

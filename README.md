@@ -150,6 +150,44 @@ any Codex-specific hook wiring.
 4. 只需要文件名、目录名，或者只是一个大概路径猜测时，使用 Codex file search。
 5. 如果一个请求既像内容搜索又像路径搜索，优先选 `search`。
 
+## Source strategy indexing
+
+默认索引只处理 raw 源文件。对于 webpack、esbuild、vite、minified-js 这类产物，索引器会先检测文件特征，再看对应的 source strategy 是否启用：
+
+- 如果文件看起来就是 raw 源码，直接索引。
+- 如果文件看起来是 bundle 或压缩产物，只有在启用了对应 `sourceStrategyKinds` 时才会尝试拆分。
+- 如果没有启用对应策略，普通 bundle 文件会被跳过。
+- 如果文件带有 source map，会直接跳过，不做解压或二次索引。
+- 无 sourcemap 的第三方压缩 JS 会自动尝试 `minified-js`，以便生成模块级骨架。
+
+CLI 和 MCP 都支持显式启用策略：
+
+```bash
+bun run src/cli.ts build . --source-strategy webpack --source-strategy esbuild
+```
+
+默认会扫描当前项目根目录下的 `plugins/` 目录，自动加载其中的 `.codex-plugin/plugin.json`。
+
+如果你要接入仓库外部的第三方策略包，再额外传入插件清单路径：
+
+```bash
+bun run src/cli.ts build . \
+  --source-strategy external-bundle \
+  --source-strategy-plugin-manifest /path/to/plugin/.codex-plugin/plugin.json
+```
+
+可用值：
+
+- `auto`
+- `webpack`
+- `esbuild`
+- `vite`
+- `minified-js`
+
+`auto` 会启用当前内置策略注册表中的所有可用策略。
+
+MCP 的 `build-index` 工具也接受同样的 `sourceStrategyKinds` 和 `sourceStrategyPluginManifests` 参数。
+
 ## CLI usage
 
 From the project root:

@@ -3,7 +3,7 @@ import { basename, resolve } from 'path'
 import type { CodeLanguage } from './ir.js'
 import type { CodeIndexProgressCallback } from './progress.js'
 
-export const DEFAULT_MAX_FILE_BYTES = 512 * 1024
+export const DEFAULT_MAX_FILE_BYTES = Number.MAX_SAFE_INTEGER
 
 export const DEFAULT_PARSE_WORKERS = resolveDefaultParseWorkers()
 export const GENERATED_INDEX_DIR_PREFIXES = ['.code_index_', '.index_'] as const
@@ -93,6 +93,9 @@ export type CodeIndexBuildOptions = {
   maxFiles?: number
   rootDir?: string
   outputDir?: string
+  discoverSourceStrategyPluginManifests?: boolean
+  sourceStrategyPluginManifests?: readonly string[]
+  sourceStrategyKinds?: readonly string[]
   maxFileBytes?: number
   onProgress?: CodeIndexProgressCallback
   workers?: number
@@ -107,6 +110,9 @@ export type CodeIndexConfig = {
   onProgress?: CodeIndexProgressCallback
   parseWorkers: number
   ignoredDirNames: ReadonlySet<string>
+  discoverSourceStrategyPluginManifests: boolean
+  sourceStrategyPluginManifests: ReadonlySet<string>
+  sourceStrategyKinds: ReadonlySet<string>
 }
 
 function resolveDefaultParseWorkers(): number {
@@ -121,6 +127,10 @@ function resolveDefaultParseWorkers(): number {
 }
 
 function normalizeIgnoredDirName(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+function normalizeSourceStrategyKind(name: string): string {
   return name.trim().toLowerCase()
 }
 
@@ -165,6 +175,18 @@ export function resolveCodeIndexConfig(
       [...DEFAULT_IGNORED_DIR_NAMES, ...(options.ignoredDirNames ?? [])].map(
         normalizeIgnoredDirName,
       ),
+    ),
+    discoverSourceStrategyPluginManifests:
+      options.discoverSourceStrategyPluginManifests ?? true,
+    sourceStrategyPluginManifests: new Set(
+      (options.sourceStrategyPluginManifests ?? [])
+        .map(manifestPath => resolve(cwd, manifestPath.trim()))
+        .filter(manifestPath => Boolean(manifestPath)),
+    ),
+    sourceStrategyKinds: new Set(
+      (options.sourceStrategyKinds ?? [])
+        .map(normalizeSourceStrategyKind)
+        .filter(kind => Boolean(kind)),
     ),
   }
 }

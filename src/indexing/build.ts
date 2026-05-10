@@ -1,12 +1,12 @@
-import { mkdir, readFile, stat } from "fs/promises";
+import { mkdir, readFile, rm, stat } from "fs/promises";
 import { join } from "path";
 import type { CodeIndexBuildOptions } from "./config.js";
 import { resolveCodeIndexConfig } from "./config.js";
 import { discoverSourceFiles, type DiscoveredSourceFile } from "./discovery.js";
 import { emitSkeletonTree } from "./emitter.js";
 import {
-  fingerprintSourceFile,
   fingerprintsEqual,
+  fingerprintLoadedSource,
   loadModuleCache,
   writeModuleCache,
   type ModuleCacheFingerprint,
@@ -18,6 +18,11 @@ import {
 } from "./ir.js";
 import { parseModuleWithBuiltinParsers } from "./parseBuiltin.js";
 import { parseModulesWithWorkerPool } from "./parseWorkerPool.js";
+import {
+  ensureSourceStrategyPluginsLoaded,
+  expandSourceFile,
+} from "./strategy.js";
+import type { SourceUnit } from "./strategyTypes.js";
 import type {
   CodeIndexBuildProgress,
   CodeIndexProgressCallback,
@@ -38,6 +43,7 @@ type ResolvedCodeIndexConfig = ReturnType<typeof resolveCodeIndexConfig>;
 type ParseModuleArgs = {
   config: ResolvedCodeIndexConfig;
   file: DiscoveredSourceFile;
+  source?: SourceUnit["source"];
 };
 
 export type BuildCodeIndexResult = {
@@ -149,6 +155,7 @@ async function prepareOutputDirectory(outputDir: string): Promise<void> {
 type ParseModuleFn = (args: {
   config: ResolvedCodeIndexConfig;
   file: DiscoveredSourceFile;
+  source?: SourceUnit["source"];
 }) => Promise<ModuleIR>;
 
 async function parseModuleWithBuiltin(
@@ -156,223 +163,39 @@ async function parseModuleWithBuiltin(
 ): Promise<ModuleIR> {
   return parseModuleWithBuiltinParsers({
     file: args.file,
+    source: args.source,
     maxFileBytes: args.config.maxFileBytes,
   });
 }
 
-type IndexedFile = {
-  file: DiscoveredSourceFile;
-  index: number;
-};
+type ExpandedUnit = {
+  index: number
+  unit: SourceUnit
+}
 
-async function parseFilesSequentially(args: {
-  config: ResolvedCodeIndexConfig;
-  entries: readonly IndexedFile[];
-  modules: ModuleIR[];
-  onParsed?: () => void | Promise<void>;
-  parse: ParseModuleFn;
-  yieldState: ReturnType<typeof createYieldState>;
+async function parseExpandedUnitsSequentially(args: {
+  config: ResolvedCodeIndexConfig
+  entries: readonly ExpandedUnit[]
+  modules: ModuleIR[]
+  onParsed?: () => void | Promise<void>
+  parse: ParseModuleFn
+  yieldState: ReturnType<typeof createYieldState>
 }): Promise<void> {
   for (const entry of args.entries) {
-    await maybeYieldToEventLoop(args.yieldState);
+    await maybeYieldToEventLoop(args.yieldState)
     args.modules[entry.index] = await args.parse({
       config: args.config,
-      file: entry.file,
-    });
-    await args.onParsed?.();
-  }
-}
-
-async function parseFiles(args: {
-  config: ResolvedCodeIndexConfig;
-  engine: BuildCodeIndexResult["engine"];
-  files: readonly DiscoveredSourceFile[];
-  parse: ParseModuleFn;
-}): Promise<{
-  changedModulePaths: Set<string>;
-  incremental: CodeIndexIncrementalStats;
-  modules: ModuleIR[];
-  parseWorkers: number;
-  previousModulesByPath: Map<string, ModuleIR>;
-  removedModulePaths: Set<string>;
-}> {
-  const entries = args.files.map((file, index) => ({
-    file,
-    index,
-  }));
-  const modules = new Array<ModuleIR>(entries.length);
-  const fingerprints = new Map<string, ModuleCacheFingerprint>();
-  const cache = await loadModuleCache({
-    engine: args.engine,
-    maxFileBytes: args.config.maxFileBytes,
-    outputDir: args.config.outputDir,
-    rootDir: args.config.rootDir,
-  });
-  const entriesToParse: IndexedFile[] = [];
-  const cacheYieldState = createYieldState();
-  const previousModulesByPath = new Map<string, ModuleIR>(
-    [...cache.entries()].map(([relativePath, record]) => [
-      relativePath,
-      record.module,
-    ]),
-  );
-  const currentModulePaths = new Set(
-    entries.map((entry) => entry.file.relativePath),
-  );
-  const removedModulePaths = new Set<string>();
-
-  for (const relativePath of cache.keys()) {
-    if (!currentModulePaths.has(relativePath)) {
-      removedModulePaths.add(relativePath);
-    }
-  }
-
-  for (const entry of entries) {
-    await maybeYieldToEventLoop(cacheYieldState);
-    const fingerprint = await fingerprintSourceFile(entry.file.absolutePath);
-    if (fingerprint) {
-      fingerprints.set(entry.file.relativePath, fingerprint);
-    }
-
-    const cached = cache.get(entry.file.relativePath);
-    if (
-      fingerprint &&
-      cached &&
-      fingerprintsEqual(fingerprint, cached.fingerprint)
-    ) {
-      modules[entry.index] = cached.module;
-      continue;
-    }
-
-    entriesToParse.push(entry);
-  }
-
-  const incremental = {
-    cacheHits: entries.length - entriesToParse.length,
-    cacheMisses: entriesToParse.length,
-    removedFiles: removedModulePaths.size,
-  };
-  const parseProgress = createParseProgressReporter({
-    onProgress: args.config.onProgress,
-    removedFiles: incremental.removedFiles,
-    reusedFiles: incremental.cacheHits,
-    total: incremental.cacheMisses,
-  });
-  const changedModulePaths = new Set(
-    entriesToParse.map((entry) => entry.file.relativePath),
-  );
-
-  if (entriesToParse.length === 0) {
-    await parseProgress.start();
-    await persistModuleCache({
-      config: args.config,
-      engine: args.engine,
-      entries,
-      fingerprints,
-      modules,
-    });
-    return {
-      changedModulePaths,
-      incremental,
-      modules,
-      parseWorkers: 0,
-      previousModulesByPath,
-      removedModulePaths,
-    };
-  }
-
-  if (args.config.parseWorkers <= 1 || entriesToParse.length <= 1) {
-    await parseProgress.start();
-    await parseFilesSequentially({
-      config: args.config,
-      entries: entriesToParse,
-      modules,
-      onParsed: () => parseProgress.increment(),
-      parse: args.parse,
-      yieldState: createYieldState(),
-    });
-    await parseProgress.finish();
-    await persistModuleCache({
-      config: args.config,
-      engine: args.engine,
-      entries,
-      fingerprints,
-      modules,
-    });
-    return {
-      changedModulePaths,
-      incremental,
-      modules,
-      parseWorkers: 1,
-      previousModulesByPath,
-      removedModulePaths,
-    };
-  }
-
-  const workerCount = Math.min(args.config.parseWorkers, entriesToParse.length);
-
-  try {
-    await parseProgress.start();
-    const workerModules = await parseModulesWithWorkerPool({
-      files: entriesToParse.map((entry) => entry.file),
-      maxFileBytes: args.config.maxFileBytes,
-      onParsed: () => parseProgress.increment(),
-      workerCount,
-    });
-
-    for (const [index, module] of workerModules.entries()) {
-      modules[entriesToParse[index]!.index] = module;
-    }
-
-    await parseProgress.finish();
-    await persistModuleCache({
-      config: args.config,
-      engine: args.engine,
-      entries,
-      fingerprints,
-      modules,
-    });
-    return {
-      changedModulePaths,
-      incremental,
-      modules,
-      parseWorkers: workerCount,
-      previousModulesByPath,
-      removedModulePaths,
-    };
-  } catch {
-    await parseProgress.reset();
-    await parseFilesSequentially({
-      config: args.config,
-      entries: entriesToParse,
-      modules,
-      onParsed: () => parseProgress.increment(),
-      parse: args.parse,
-      yieldState: createYieldState(),
-    });
-    await parseProgress.finish();
-    await persistModuleCache({
-      config: args.config,
-      engine: args.engine,
-      entries,
-      fingerprints,
-      modules,
-    });
-    return {
-      changedModulePaths,
-      incremental,
-      modules,
-      parseWorkers: 1,
-      previousModulesByPath,
-      removedModulePaths,
-    };
+      file: entry.unit.file,
+      source: entry.unit.source,
+    })
+    await args.onParsed?.()
   }
 }
 
 async function persistModuleCache(args: {
   config: ResolvedCodeIndexConfig;
   engine: BuildCodeIndexResult["engine"];
-  entries: readonly IndexedFile[];
+  entries: readonly ExpandedUnit[];
   fingerprints: ReadonlyMap<string, ModuleCacheFingerprint>;
   modules: readonly ModuleIR[];
 }): Promise<void> {
@@ -383,14 +206,14 @@ async function persistModuleCache(args: {
       outputDir: args.config.outputDir,
       rootDir: args.config.rootDir,
       entries: args.entries
-        .map((entry) => {
-          const fingerprint = args.fingerprints.get(entry.file.relativePath);
+      .map((entry) => {
+          const fingerprint = args.fingerprints.get(entry.unit.file.relativePath);
           const module = args.modules[entry.index];
           if (!fingerprint || !module) {
             return null;
           }
           return {
-            relativePath: entry.file.relativePath,
+            relativePath: entry.unit.file.relativePath,
             fingerprint,
             module,
           };
@@ -407,6 +230,280 @@ async function persistModuleCache(args: {
     });
   } catch {
     // Incremental cache persistence is best-effort and should not fail indexing.
+  }
+}
+
+async function cleanupTemporaryPaths(paths: readonly string[]): Promise<void> {
+  for (const path of [...paths].reverse()) {
+    try {
+      await rm(path, { recursive: true, force: true })
+    } catch {
+      // Best effort cleanup only.
+    }
+  }
+}
+
+async function fingerprintSourceUnit(args: {
+  unit: SourceUnit;
+}): Promise<ModuleCacheFingerprint | null> {
+  const source = args.unit.source
+  if (source) {
+    return fingerprintLoadedSource(source)
+  }
+
+  if (!args.unit.fingerprintPath) {
+    return null
+  }
+
+  try {
+    const text = await readFile(args.unit.fingerprintPath, 'utf8')
+    return fingerprintLoadedSource({
+      text,
+      byteSize: Buffer.byteLength(text, 'utf8'),
+      truncated: false,
+    })
+  } catch {
+    return null
+  }
+}
+
+async function parseExpandedUnits(args: {
+  config: ResolvedCodeIndexConfig;
+  engine: BuildCodeIndexResult["engine"];
+  files: readonly DiscoveredSourceFile[];
+  parse: ParseModuleFn;
+}): Promise<{
+  changedModulePaths: Set<string>;
+  incremental: CodeIndexIncrementalStats;
+  modules: ModuleIR[];
+  parseWorkers: number;
+  previousModulesByPath: Map<string, ModuleIR>;
+  removedModulePaths: Set<string>;
+}> {
+  const expandedEntries: ExpandedUnit[] = []
+  const expandYieldState = createYieldState()
+  const cleanupPaths: string[] = []
+
+  try {
+    await reportProgress(args.config.onProgress, {
+      phase: 'expand',
+      message: `Expanding ${args.files.length} source files`,
+      completed: 0,
+      total: args.files.length,
+    })
+
+    let expandedFiles = 0
+    for (const file of args.files) {
+      await maybeYieldToEventLoop(expandYieldState)
+      const sourceExpansion = await expandSourceFile({
+        enabledKinds: args.config.sourceStrategyKinds,
+        file,
+        maxFileBytes: args.config.maxFileBytes,
+        rootDir: args.config.rootDir,
+        discoverPluginManifests: args.config.discoverSourceStrategyPluginManifests,
+        pluginManifests: args.config.sourceStrategyPluginManifests,
+      })
+      cleanupPaths.push(...sourceExpansion.cleanupPaths)
+      if (sourceExpansion.units.length > 0) {
+        expandedFiles++
+      }
+      for (const unit of sourceExpansion.units) {
+        expandedEntries.push({
+          index: expandedEntries.length,
+          unit,
+        })
+      }
+
+      if (args.config.onProgress && expandedFiles % 32 === 0) {
+        await args.config.onProgress({
+          phase: 'expand',
+          message: `Expanded ${expandedFiles}/${args.files.length} source files`,
+          completed: expandedFiles,
+          total: args.files.length,
+        })
+      }
+    }
+
+    await reportProgress(args.config.onProgress, {
+      phase: 'expand',
+      message: `Expanded ${expandedFiles}/${args.files.length} source files`,
+      completed: expandedFiles,
+      total: args.files.length,
+    })
+
+    const modules = new Array<ModuleIR>(expandedEntries.length)
+    const fingerprints = new Map<string, ModuleCacheFingerprint>()
+    const cache = await loadModuleCache({
+      engine: args.engine,
+      maxFileBytes: args.config.maxFileBytes,
+      outputDir: args.config.outputDir,
+      rootDir: args.config.rootDir,
+    })
+
+    const currentModulePaths = new Set(
+      expandedEntries.map(entry => entry.unit.file.relativePath),
+    )
+    const removedModulePaths = new Set<string>()
+    for (const relativePath of cache.keys()) {
+      if (!currentModulePaths.has(relativePath)) {
+        removedModulePaths.add(relativePath)
+      }
+    }
+
+    const entriesToParse: ExpandedUnit[] = []
+    for (const entry of expandedEntries) {
+      const fingerprint = await fingerprintSourceUnit({ unit: entry.unit })
+      if (fingerprint) {
+        fingerprints.set(entry.unit.file.relativePath, fingerprint)
+      }
+
+      const cached = cache.get(entry.unit.file.relativePath)
+      if (
+        fingerprint &&
+        cached &&
+        fingerprintsEqual(fingerprint, cached.fingerprint)
+      ) {
+        modules[entry.index] = cached.module
+        continue
+      }
+
+      entriesToParse.push(entry)
+    }
+
+    const incremental = {
+      cacheHits: expandedEntries.length - entriesToParse.length,
+      cacheMisses: entriesToParse.length,
+      removedFiles: removedModulePaths.size,
+    }
+    const parseProgress = createParseProgressReporter({
+      onProgress: args.config.onProgress,
+      removedFiles: incremental.removedFiles,
+      reusedFiles: incremental.cacheHits,
+      total: incremental.cacheMisses,
+    })
+    const changedModulePaths = new Set(
+      entriesToParse.map(entry => entry.unit.file.relativePath),
+    )
+
+    const previousModulesByPath = new Map<string, ModuleIR>(
+      [...cache.entries()].map(([relativePath, record]) => [
+        relativePath,
+        record.module,
+      ]),
+    )
+
+    if (entriesToParse.length === 0) {
+      await parseProgress.start()
+      await persistModuleCache({
+        config: args.config,
+        engine: args.engine,
+        entries: expandedEntries,
+        fingerprints,
+        modules,
+      })
+      return {
+        changedModulePaths,
+        incremental,
+        modules,
+        parseWorkers: 0,
+        previousModulesByPath,
+        removedModulePaths,
+      }
+    }
+
+    const sourcesByRelativePath = new Map<string, SourceUnit['source']>(
+      entriesToParse.map(entry => [entry.unit.file.relativePath, entry.unit.source]),
+    )
+
+    if (args.config.parseWorkers <= 1 || entriesToParse.length <= 1) {
+      await parseProgress.start()
+      await parseExpandedUnitsSequentially({
+        config: args.config,
+        entries: entriesToParse,
+        modules,
+        onParsed: () => parseProgress.increment(),
+        parse: args.parse,
+        yieldState: createYieldState(),
+      })
+      await parseProgress.finish()
+      await persistModuleCache({
+        config: args.config,
+        engine: args.engine,
+        entries: expandedEntries,
+        fingerprints,
+        modules,
+      })
+      return {
+        changedModulePaths,
+        incremental,
+        modules,
+        parseWorkers: 1,
+        previousModulesByPath,
+        removedModulePaths,
+      }
+    }
+
+    const workerCount = Math.min(args.config.parseWorkers, entriesToParse.length)
+
+    try {
+      await parseProgress.start()
+      const workerModules = await parseModulesWithWorkerPool({
+        files: entriesToParse.map(entry => entry.unit.file),
+        maxFileBytes: args.config.maxFileBytes,
+        onParsed: () => parseProgress.increment(),
+        sources: sourcesByRelativePath,
+        workerCount,
+      })
+
+      for (const [index, module] of workerModules.entries()) {
+        modules[entriesToParse[index]!.index] = module
+      }
+
+      await parseProgress.finish()
+      await persistModuleCache({
+        config: args.config,
+        engine: args.engine,
+        entries: expandedEntries,
+        fingerprints,
+        modules,
+      })
+      return {
+        changedModulePaths,
+        incremental,
+        modules,
+        parseWorkers: workerCount,
+        previousModulesByPath,
+        removedModulePaths,
+      }
+    } catch {
+      await parseProgress.reset()
+      await parseExpandedUnitsSequentially({
+        config: args.config,
+        entries: entriesToParse,
+        modules,
+        onParsed: () => parseProgress.increment(),
+        parse: args.parse,
+        yieldState: createYieldState(),
+      })
+      await parseProgress.finish()
+      await persistModuleCache({
+        config: args.config,
+        engine: args.engine,
+        entries: expandedEntries,
+        fingerprints,
+        modules,
+      })
+      return {
+        changedModulePaths,
+        incremental,
+        modules,
+        parseWorkers: 1,
+        previousModulesByPath,
+        removedModulePaths,
+      }
+    }
+  } finally {
+    await cleanupTemporaryPaths(cleanupPaths)
   }
 }
 
@@ -511,6 +608,14 @@ async function reusePreviousOutputsIfUnchanged(args: {
 export async function buildCodeIndex(
   options: CodeIndexBuildOptions = {},
 ): Promise<BuildCodeIndexResult> {
+  const config = resolveCodeIndexConfig(options);
+  await ensureSourceStrategyPluginsLoaded(
+    {
+      manifestPaths: [...config.sourceStrategyPluginManifests],
+      rootDir: config.rootDir,
+      discoverFromRoot: config.discoverSourceStrategyPluginManifests,
+    },
+  );
   return buildCodeIndexWithDiscovery(options, {
     discover: discoverSourceFiles,
     engine: "typescript",
@@ -546,7 +651,7 @@ async function buildCodeIndexWithDiscovery(
   });
 
   const parseStartedAt = performance.now();
-  const parsed = await parseFiles({
+  const parsed = await parseExpandedUnits({
     config,
     engine: args.engine,
     files,

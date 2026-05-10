@@ -29,6 +29,11 @@
     "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
-    "tree-sitter-cli": "^0.26.8"
+    "esbuild": "^0.28.0",
+    "terser": "^5.47.1",
+    "tree-sitter-cli": "^0.26.8",
+    "vite": "^8.0.11",
+    "webpack": "^5.106.2",
+    "webpack-cli": "^7.0.2"
   }
 }

@@ -1,5 +1,6 @@
 export type CodeIndexBuildPhase =
   | 'discover'
+  | 'expand'
   | 'parse'
   | 'emit'
   | 'edges'
