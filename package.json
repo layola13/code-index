@@ -6,6 +6,7 @@
   "description": "Standalone Bun+TS code index plugin and MCP server.",
   "scripts": {
     "index": "bun run src/cli.ts build",
+    "plugin:install": "codex plugin marketplace add .",
     "mcp": "bun run src/mcp.ts",
     "test": "bun test"
   },

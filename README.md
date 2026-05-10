@@ -44,6 +44,18 @@ If an AST parser or binding fails at runtime, the build falls back to the heuris
 
 ## Local install in Codex
 
+From a fresh clone, install this plugin into Codex with:
+
+```bash
+bun run plugin:install
+```
+
+That script runs:
+
+```bash
+codex plugin marketplace add .
+```
+
 This repository is set up as a local plugin under:
 
 `/home/vscode/projects/code-index`
