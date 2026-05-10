@@ -1,0 +1,33 @@
+{
+  "name": "code-index",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Bun+TS code index plugin and MCP server.",
+  "scripts": {
+    "index": "bun run src/cli.ts build",
+    "mcp": "bun run src/mcp.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@kreuzberg/tree-sitter-language-pack": "^1.8.0",
+    "@kreuzberg/tree-sitter-language-pack-wasm": "^1.8.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@tree-sitter-grammars/tree-sitter-zig": "^1.1.2",
+    "@vscode/tree-sitter-wasm": "^0.3.1",
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-c": "^0.24.1",
+    "tree-sitter-cpp": "^0.23.4",
+    "tree-sitter-go": "^0.25.0",
+    "tree-sitter-haxe": "^0.13.0",
+    "tree-sitter-java": "^0.23.5",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-rust": "^0.24.0",
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.26.8"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.8"
+  }
+}
