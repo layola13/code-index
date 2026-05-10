@@ -132,6 +132,22 @@ export type SearchMatch<T> = {
   score: number
 }
 
+export const SEARCH_TEXT_MODES = [
+  'contains',
+  'exact',
+  'prefix',
+  'suffix',
+  'regex',
+] as const
+
+export type SearchTextMode = (typeof SEARCH_TEXT_MODES)[number]
+
+type SearchTextQuery = {
+  mode: SearchTextMode
+  text: string
+  regex?: RegExp
+}
+
 function containsText(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.toLowerCase())
 }
@@ -143,6 +159,107 @@ function clampLimit(limit: number | undefined, defaultLimit: number): number {
   return Math.min(Math.trunc(limit), 1000)
 }
 
+function normalizeSearchMode(mode?: string): SearchTextMode {
+  const normalized = mode?.trim().toLowerCase()
+  if (!normalized) {
+    return 'contains'
+  }
+  if ((SEARCH_TEXT_MODES as readonly string[]).includes(normalized)) {
+    return normalized as SearchTextMode
+  }
+  throw new Error(`unsupported queryMode: ${mode}`)
+}
+
+function compileRegexQuery(query: string): RegExp {
+  try {
+    return new RegExp(query, 'iu')
+  } catch (error) {
+    throw new Error(
+      `invalid regex query ${JSON.stringify(query)}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+}
+
+function buildSearchTextQuery(
+  query: string | undefined,
+  queryMode?: string,
+): SearchTextQuery | null {
+  const mode = normalizeSearchMode(queryMode)
+  const text = query?.trim()
+  if (!text) {
+    return null
+  }
+  return mode === 'regex'
+    ? {
+        mode,
+        text,
+        regex: compileRegexQuery(text),
+      }
+    : {
+        mode,
+        text,
+      }
+}
+
+function scoreTextField(field: string, query: SearchTextQuery): number {
+  const haystack = field.toLowerCase()
+  const needle = query.text.toLowerCase()
+
+  switch (query.mode) {
+    case 'contains':
+      return haystack.includes(needle) ? 1 : 0
+    case 'exact':
+      return haystack === needle ? 4 : 0
+    case 'prefix':
+      return haystack.startsWith(needle) ? 3 : 0
+    case 'suffix':
+      return haystack.endsWith(needle) ? 2 : 0
+    case 'regex':
+      return query.regex?.test(field) ? 1 : 0
+  }
+}
+
+function bestFieldMatchScore(
+  fields: readonly string[],
+  query: SearchTextQuery,
+): number | null {
+  let bestScore = 0
+  for (const field of fields) {
+    if (!field) {
+      continue
+    }
+    bestScore = Math.max(bestScore, scoreTextField(field, query))
+  }
+  return bestScore > 0 ? bestScore : null
+}
+
+function moduleSearchFields(module: ModuleIndexRecord): string[] {
+  return [
+    module.module_id,
+    module.path,
+    module.lang,
+    module.parse_mode,
+    ...(module.notes ?? []),
+    ...(module.errors ?? []),
+  ]
+}
+
+function symbolSearchFields(
+  symbol: SymbolIndexRecord,
+  modulePath: string | undefined,
+): string[] {
+  return [
+    symbol.symbol_id,
+    symbol.module_id,
+    symbol.kind,
+    symbol.qualified_name,
+    symbol.signature,
+    modulePath ?? '',
+  ]
+}
+
 export async function searchModules(
   outputDir: string,
   args: {
@@ -151,10 +268,11 @@ export async function searchModules(
     parseMode?: string
     path?: string
     query?: string
+    queryMode?: string
   },
 ): Promise<SearchMatch<ModuleIndexRecord>[]> {
   const modules = await readModuleIndex(outputDir)
-  const query = args.query?.trim()
+  const query = buildSearchTextQuery(args.query, args.queryMode)
   const path = args.path?.trim()
   const language = args.language?.trim().toLowerCase()
   const parseMode = args.parseMode?.trim().toLowerCase()
@@ -164,18 +282,11 @@ export async function searchModules(
     .map(module => {
       let score = 0
       if (query) {
-        const haystack = [
-          module.module_id,
-          module.path,
-          module.lang,
-          module.parse_mode,
-          ...(module.notes ?? []),
-          ...(module.errors ?? []),
-        ].join('\n')
-        if (!containsText(haystack, query)) {
+        const queryScore = bestFieldMatchScore(moduleSearchFields(module), query)
+        if (queryScore === null) {
           return null
         }
-        score += haystack.toLowerCase().includes(query.toLowerCase()) ? 1 : 0
+        score += queryScore
       }
       if (path && !containsText(module.path, path)) {
         return null
@@ -214,12 +325,13 @@ export async function searchSymbols(
     name?: string
     path?: string
     query?: string
+    queryMode?: string
   },
-): Promise<Array<SearchMatch<SymbolIndexRecord & { module_path?: string }>>> {
+): Promise<Array<SearchMatch<SymbolIndexRecord & { module_path: string | undefined }>>> {
   const symbols = await readSymbolIndex(outputDir)
   const modules = await readModuleIndex(outputDir)
   const modulePathById = new Map(modules.map(module => [module.module_id, module.path]))
-  const query = args.query?.trim()
+  const query = buildSearchTextQuery(args.query, args.queryMode)
   const name = args.name?.trim()
   const path = args.path?.trim()
   const kind = args.kind?.trim().toLowerCase()
@@ -231,18 +343,14 @@ export async function searchSymbols(
       let score = 0
 
       if (query) {
-        const haystack = [
-          symbol.symbol_id,
-          symbol.module_id,
-          symbol.kind,
-          symbol.qualified_name,
-          symbol.signature,
-          modulePath ?? '',
-        ].join('\n')
-        if (!containsText(haystack, query)) {
+        const queryScore = bestFieldMatchScore(
+          symbolSearchFields(symbol, modulePath),
+          query,
+        )
+        if (queryScore === null) {
           return null
         }
-        score += 1
+        score += queryScore
       }
 
       if (name && !containsText(symbol.qualified_name, name) && !containsText(symbol.signature, name)) {
@@ -277,7 +385,9 @@ export async function searchSymbols(
     .filter(
       (
         match,
-      ): match is SearchMatch<SymbolIndexRecord & { module_path?: string }> =>
+      ): match is SearchMatch<
+        SymbolIndexRecord & { module_path: string | undefined }
+      > =>
         Boolean(match),
     )
     .sort((left, right) => {

@@ -8,7 +8,7 @@ export type LoadedSource = {
   truncated: boolean
 }
 
-function normalizeDecodedText(text: string): string {
+export function normalizeSourceText(text: string): string {
   const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
   return withoutBom.replace(/\r\n?/g, '\n')
 }
@@ -23,7 +23,7 @@ export async function readSourceText(
   if (byteSize <= maxBytes) {
     const buffer = await readFile(filePath)
     return {
-      text: normalizeDecodedText(utf8Decoder.decode(buffer)),
+      text: normalizeSourceText(utf8Decoder.decode(buffer)),
       byteSize,
       truncated: false,
     }
@@ -34,7 +34,7 @@ export async function readSourceText(
     const buffer = Buffer.alloc(maxBytes)
     const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0)
     return {
-      text: normalizeDecodedText(
+      text: normalizeSourceText(
         utf8Decoder.decode(buffer.subarray(0, bytesRead)),
       ),
       byteSize,
@@ -45,3 +45,9 @@ export async function readSourceText(
   }
 }
 
+export async function readSourceTextForSearch(
+  filePath: string,
+): Promise<string> {
+  const text = await readFile(filePath, 'utf8')
+  return normalizeSourceText(text)
+}

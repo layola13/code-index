@@ -13,20 +13,51 @@ import {
   getIndexArtifactSummary,
   readArtifactText,
   resolveIndexOutputDir,
+  SEARCH_TEXT_MODES,
   searchModules,
   searchSymbols,
 } from './artifacts.js'
 import { errorMessage } from './utils/errors.js'
+import { searchSourceFiles } from './sourceSearch.js'
 
 const SERVER_VERSION = '0.1.0'
 
 type ToolDefinition = {
   description: string
-  inputSchema: Record<string, unknown>
+  inputSchema: {
+    additionalProperties?: boolean
+    properties?: Record<string, object>
+    required?: string[]
+    type: 'object'
+  }
   name: string
 }
 
 const TOOLS: ToolDefinition[] = [
+  {
+    name: 'search',
+    description:
+      'Search raw source text directly. Use this for code content, symbols in context, call sites, config values, log strings, implementation details, and multi-term pattern queries like A|B|C. Do not use it for filename-only fuzzy matching; use Codex file search for that. Use | for OR across terms and append "in <scope>" to restrict results to a repo-relative path prefix. Terms are treated as regex patterns.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rootDir: { type: 'string' },
+        outputDir: { type: 'string' },
+        query: {
+          type: 'string',
+          description:
+            'Regex terms separated by |. Example: describe\\(|startMcpServer|callTool in src',
+        },
+        limit: {
+          type: 'number',
+          minimum: 1,
+          description: 'Maximum number of files to return',
+        },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
   {
     name: 'build-index',
     description:
@@ -90,13 +121,17 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'search-modules',
     description:
-      'Search module records in modules.jsonl by path, language, parse mode, or free-text query.',
+      'Search module records in modules.jsonl by path, language, parse mode, or free-text query. Use this for module-level metadata, not source text. queryMode controls whether query is contains, exact, prefix, suffix, or regex.',
     inputSchema: {
       type: 'object',
       properties: {
         rootDir: { type: 'string' },
         outputDir: { type: 'string' },
         query: { type: 'string' },
+        queryMode: {
+          type: 'string',
+          enum: [...SEARCH_TEXT_MODES],
+        },
         path: { type: 'string' },
         language: { type: 'string' },
         parseMode: { type: 'string' },
@@ -108,13 +143,17 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'search-symbols',
     description:
-      'Search symbol records in symbols.jsonl by symbol name, kind, path, or free-text query.',
+      'Search symbol records in symbols.jsonl by symbol name, kind, path, or free-text query. Use this for indexed symbol metadata, not raw source text. queryMode controls whether query is contains, exact, prefix, suffix, or regex.',
     inputSchema: {
       type: 'object',
       properties: {
         rootDir: { type: 'string' },
         outputDir: { type: 'string' },
         query: { type: 'string' },
+        queryMode: {
+          type: 'string',
+          enum: [...SEARCH_TEXT_MODES],
+        },
         name: { type: 'string' },
         kind: { type: 'string' },
         path: { type: 'string' },
@@ -279,6 +318,24 @@ async function handleDescribeIndex(args: unknown): Promise<CallToolResult> {
   }
 }
 
+async function handleSearch(args: unknown): Promise<CallToolResult> {
+  const query = getStringArg(args, 'query')
+  if (!query) {
+    return errorResult('Missing required argument: query')
+  }
+
+  const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
+  const outputDir = getStringArg(args, 'outputDir')
+  const result = await searchSourceFiles({
+    query,
+    limit: getNumberArg(args, 'limit'),
+    outputDir,
+    rootDir,
+  })
+
+  return jsonResult(result)
+}
+
 async function handleSearchModules(args: unknown): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
@@ -290,6 +347,7 @@ async function handleSearchModules(args: unknown): Promise<CallToolResult> {
 
   const matches = await searchModules(outputDir, {
     query: getStringArg(args, 'query'),
+    queryMode: getStringArg(args, 'queryMode'),
     path: getStringArg(args, 'path'),
     language: getStringArg(args, 'language'),
     parseMode: getStringArg(args, 'parseMode'),
@@ -318,6 +376,7 @@ async function handleSearchSymbols(args: unknown): Promise<CallToolResult> {
 
   const matches = await searchSymbols(outputDir, {
     query: getStringArg(args, 'query'),
+    queryMode: getStringArg(args, 'queryMode'),
     name: getStringArg(args, 'name'),
     kind: getStringArg(args, 'kind'),
     path: getStringArg(args, 'path'),
@@ -359,6 +418,8 @@ export async function startMcpServer(): Promise<void> {
 
     try {
       switch (name) {
+        case 'search':
+          return await handleSearch(args)
         case 'build-index':
           return await handleBuildIndex(args)
         case 'read-artifact':

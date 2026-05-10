@@ -20,3 +20,27 @@ when_to_use: "Use this as a blocking first step when a code index already exists
 - The skeleton is not the source of truth for exact logic, syntax, comments, formatting, or language-specific edge cases; confirm against the original files before making precise code claims.
 - Only fall back to full source-file reads when the index is stale, missing, or insufficient for the question at hand.
 - If the index is stale after edits, rerun `/index`.
+
+## Search Routing
+- Decide the target type first, then pick exactly one search tool.
+- If the target is raw source text inside files, use `code-index` source search.
+- If the target is symbol metadata, use `search-symbols`.
+- If the target is module metadata, use `search-modules`.
+- If the target is a filename, directory name, or approximate path, use Codex file search.
+- If the request is ambiguous between content and path, prefer `code-index` source search.
+- Never use Codex file search for source content, symbol metadata, or module metadata.
+
+## Decision Order
+1. Does the user want to find code text, call sites, config values, string literals, or implementation details? Use `code-index` source search.
+2. Does the user want a class, function, method, qualified name, signature, or kind? Use `search-symbols`.
+3. Does the user want module path, language, parse mode, or another index field? Use `search-modules`.
+4. Does the user want a filename or folder name, or only an approximate path guess? Use Codex file search.
+5. If more than one answer seems possible, choose the earliest matching rule above.
+
+## Fast Heuristics
+- Function name, constant, setting, log string, code fragment, quoted source text, or regex-like query such as `A|B|C` -> `code-index` source search.
+- Symbol name or qualified symbol -> `search-symbols`.
+- Module path or file-level index metadata -> `search-modules`.
+- File basename or folder name -> Codex file search.
+- Example: `describe\\(|startMcpServer|ListToolsRequestSchema|CallToolRequestSchema|callTool|tools/list|tools/call in src` -> `code-index` source search.
+- Example: `src/index.ts` or `bevy` as a project path guess -> Codex file search.

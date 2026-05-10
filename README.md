@@ -127,13 +127,26 @@ any Codex-specific hook wiring.
 
 ## MCP usage
 
-Once the plugin is enabled, Codex should expose the plugin MCP server automatically. The MCP server supports:
+启用插件后，Codex 会自动暴露这个插件的 MCP 服务。当前支持的工具有：
 
+- `search`
 - `build-index`
 - `read-artifact`
 - `search-modules`
 - `search-symbols`
 - `describe-index`
+
+`search` 直接扫描源代码文本。可以用 `|` 表示多个条件的“或”，也可以在末尾加 `in <scope>` 来限制到仓库内的某个路径前缀。
+
+`search` 适合查代码内容、符号上下文、调用点、配置文本和实现细节。只有在你只想做文件名或目录名的模糊匹配时，才使用 Codex 的文件搜索。
+
+路由规则：
+
+1. 需要查原始源码文本、调用点、配置值、日志字符串、实现细节，或者像 `A|B|C` 这种多条件查询时，使用 `search`。
+2. 需要查符号元数据，比如类名、函数名、方法名、限定名、签名或 kind 时，使用 `search-symbols`。
+3. 需要查模块元数据，比如路径、语言、解析模式或其他索引字段时，使用 `search-modules`。
+4. 只需要文件名、目录名，或者只是一个大概路径猜测时，使用 Codex file search。
+5. 如果一个请求既像内容搜索又像路径搜索，优先选 `search`。
 
 ## CLI usage
 
