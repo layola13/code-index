@@ -23,6 +23,9 @@ export const LANGUAGE_BY_EXTENSION: Record<string, CodeLanguage> = {
   '.java': 'java',
   '.hx': 'haxe',
   '.zig': 'zig',
+  '.saasm': 'saasm',
+  '.saasm-iface': 'saasm',
+  '.saasm-layout': 'saasm',
   '.c': 'c',
   '.h': 'c',
   '.cc': 'cpp',
@@ -87,6 +90,10 @@ export const DEFAULT_IGNORED_DIR_NAMES = new Set([
   'tmp',
   '.tmp',
 ])
+
+const LANGUAGE_SUFFIX_ENTRIES = Object.entries(LANGUAGE_BY_EXTENSION).sort(
+  ([left], [right]) => right.length - left.length,
+)
 
 export type CodeIndexBuildOptions = {
   ignoredDirNames?: readonly string[]
@@ -195,4 +202,14 @@ export function getCodeLanguageForExtension(
   extension: string,
 ): CodeLanguage | null {
   return LANGUAGE_BY_EXTENSION[extension.toLowerCase()] ?? null
+}
+
+export function getCodeLanguageForPath(filePath: string): CodeLanguage | null {
+  const normalized = filePath.replaceAll('\\', '/').toLowerCase()
+  for (const [suffix, language] of LANGUAGE_SUFFIX_ENTRIES) {
+    if (normalized.endsWith(suffix)) {
+      return language
+    }
+  }
+  return null
 }

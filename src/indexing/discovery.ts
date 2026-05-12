@@ -1,7 +1,7 @@
 import { readdir } from 'fs/promises'
-import { extname, relative, sep } from 'path'
+import { relative, sep } from 'path'
 import type { CodeIndexConfig } from './config.js'
-import { getCodeLanguageForExtension, isGeneratedIndexDirName } from './config.js'
+import { getCodeLanguageForPath, isGeneratedIndexDirName } from './config.js'
 import type { CodeLanguage } from './ir.js'
 import type { CodeIndexBuildProgress } from './progress.js'
 import { createYieldState, maybeYieldToEventLoop } from './runtime.js'
@@ -91,7 +91,7 @@ export async function discoverSourceFiles(
         continue
       }
 
-      const language = getCodeLanguageForExtension(extname(entry.name))
+      const language = getCodeLanguageForPath(entry.name)
       if (!language) {
         continue
       }

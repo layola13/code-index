@@ -611,6 +611,92 @@ public:
     }
   });
 
+  it("indexes SA source files and preserves module-level skeletons", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-saasm-"));
+
+    try {
+      await mkdir(join(rootDir, "src"), { recursive: true });
+      await writeFile(
+        join(rootDir, "src", "main.saasm"),
+        [
+          '@import "sa_std/io/print.saasm-iface"',
+          '#def MAIN_SIZE = 32',
+          '@export tick(e: ptr, n: i32) -> i32:',
+          'L_START:',
+          '  call @sys_print(e, n)',
+          '  return n',
+          '',
+          '@ffi_wrapper open_file(path: ptr) -> ptr:',
+          '  result = call @c_open(path)',
+          '  return result',
+          '',
+          '@extern c_open(path: ptr) -> ptr',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      await writeFile(
+        join(rootDir, "src", "contract.saasm-iface"),
+        [
+          '@extern sa_hash(data: ptr, len: i32) -> i32',
+          '@extern sa_log(msg: ptr) -> i32',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      await writeFile(
+        join(rootDir, "src", "layout.saasm-layout"),
+        [
+          '#def Layout_SIZE = 16',
+          '#def Layout_ptr = +0',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir: join(rootDir, ".code_index"),
+        workers: 2,
+      });
+
+      expect(result.manifest.languages.saasm).toBe(3);
+      expect(result.manifest.moduleCount).toBe(3);
+
+      const modulesText = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesText).toContain('"path":"src/main.saasm"');
+      expect(modulesText).toContain('"lang":"saasm"');
+      expect(modulesText).toContain('"path":"src/contract.saasm-iface"');
+      expect(modulesText).toContain('"path":"src/layout.saasm-layout"');
+
+      const symbolsText = await readFile(
+        join(rootDir, ".code_index", "index", "symbols.jsonl"),
+        "utf8",
+      );
+      expect(symbolsText).toContain('"qualified_name":"src/main.saasm::tick"');
+      expect(symbolsText).toContain('"qualified_name":"src/main.saasm::open_file"');
+      expect(symbolsText).toContain('"qualified_name":"src/main.saasm::c_open"');
+
+      const summaryText = await readFile(
+        join(rootDir, ".code_index", "index", "summary.md"),
+        "utf8",
+      );
+      expect(summaryText).toContain("- saasm: 3");
+
+      const skeletonText = await readFile(
+        join(rootDir, ".code_index", "skeleton", "src", "main.py"),
+        "utf8",
+      );
+      expect(skeletonText).toContain("def tick");
+      expect(skeletonText).toContain("def open_file");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("formats language counts in a stable order", () => {
     expect(
       formatCountSummary({

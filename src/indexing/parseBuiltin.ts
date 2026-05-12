@@ -3,6 +3,7 @@ import type { DiscoveredSourceFile } from './discovery.js'
 import type { ModuleIR } from './ir.js'
 import { relativePathToModuleId } from './parserUtils.js'
 import { parseAstModule } from './treeSitterAst.js'
+import { parseSaasmModule } from './parsers/saasm.js'
 import { parseGenericModule } from './parsers/generic.js'
 import { parsePythonModule } from './parsers/python.js'
 import { parseTypeScriptLikeModule } from './parsers/typescriptLike.js'
@@ -66,6 +67,14 @@ function parseModule(context: {
   file: DiscoveredSourceFile
   source: Awaited<ReturnType<typeof readSourceText>>
 }): ModuleIR {
+  if (context.file.language === 'saasm') {
+    return parseSaasmModule({
+      config: context.config,
+      file: context.file,
+      source: context.source,
+    })
+  }
+
   let astResult: ReturnType<typeof parseAstModule> | null = null
   let astError: unknown = null
 

@@ -10,6 +10,7 @@ export type CodeLanguage =
   | 'c'
   | 'cpp'
   | 'zig'
+  | 'saasm'
   | 'generic'
 
 export const CODE_INDEX_ARTIFACT_VERSION = 2

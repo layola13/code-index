@@ -18,6 +18,7 @@ import {
   splitTopLevel,
   stripQuotes,
 } from './parserUtils.js'
+import { getCodeLanguageForPath } from './config.js'
 import {
   loadTreeSitter,
   loadTreeSitterParser,
@@ -40,6 +41,7 @@ type ParseLanguage =
   | 'c'
   | 'cpp'
   | 'zig'
+  | 'saasm'
   | 'generic'
 
 type AstModuleResult = {
@@ -55,6 +57,8 @@ type AstModuleResult = {
 
 const nodeRequire = createRequire(import.meta.url)
 
+type TreeSitterParseLanguage = Exclude<ParseLanguage, 'generic' | 'saasm'>
+
 type LanguageLoaders = {
   javascript: () => unknown
   python: () => unknown
@@ -69,7 +73,7 @@ type LanguageLoaders = {
   tsx: () => unknown
 }
 
-const languageRootPackages: Record<Exclude<ParseLanguage, 'generic'>, string> = {
+const languageRootPackages: Record<TreeSitterParseLanguage, string> = {
   typescript: 'tree-sitter-typescript',
   tsx: 'tree-sitter-typescript',
   javascript: 'tree-sitter-javascript',
@@ -98,6 +102,9 @@ const parseLanguageByExtension: Array<[RegExp, ParseLanguage]> = [
   [/\.java$/i, 'java'],
   [/\.hx$/i, 'haxe'],
   [/\.zig$/i, 'zig'],
+  [/\.saasm$/i, 'saasm'],
+  [/\.saasm-iface$/i, 'saasm'],
+  [/\.saasm-layout$/i, 'saasm'],
   [/\.cpp$/i, 'cpp'],
   [/\.cxx$/i, 'cpp'],
   [/\.cc$/i, 'cpp'],
@@ -114,7 +121,7 @@ const parserCache = new Map<ParseLanguage, ReturnType<typeof loadTreeSitterParse
 const languageBindingCache = new Map<ParseLanguage, unknown>()
 const structureCache = new Map<string, AstModuleResult>()
 
-function loadLanguageBinding(language: Exclude<ParseLanguage, 'generic'>): unknown {
+function loadLanguageBinding(language: TreeSitterParseLanguage): unknown {
   const cached = languageBindingCache.get(language)
   if (cached) {
     return cached
@@ -150,6 +157,9 @@ function loadParser(language: ParseLanguage): ReturnType<typeof loadTreeSitterPa
     parserCache.set(language, parser)
     return parser
   }
+  if (language === 'saasm') {
+    throw new Error('SA source uses the line-oriented parser, not tree-sitter')
+  }
 
   const binding = loadLanguageBinding(language)
   const languageObject =
@@ -160,6 +170,11 @@ function loadParser(language: ParseLanguage): ReturnType<typeof loadTreeSitterPa
 }
 
 function detectAstLanguage(filePath: string, sourceText: string): ParseLanguage {
+  const pathLanguage = getCodeLanguageForPath(filePath)
+  if (pathLanguage === 'saasm') {
+    return 'saasm'
+  }
+
   const extension = extname(filePath).toLowerCase()
   for (const [pattern, language] of parseLanguageByExtension) {
     if (pattern.test(extension)) {
@@ -2698,6 +2713,13 @@ function parseAstOnlyModule(args: {
       })
     case 'zig':
       return parseZigModuleAst({
+        filePath: args.filePath,
+        moduleId: args.moduleId,
+        relativePath: args.relativePath,
+        sourceText: args.sourceText,
+      })
+    case 'saasm':
+      return parseGenericAstFallback({
         filePath: args.filePath,
         moduleId: args.moduleId,
         relativePath: args.relativePath,
