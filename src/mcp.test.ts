@@ -275,6 +275,22 @@ describe('mcp server', () => {
       expect(toolNames).toContain('get-symbol-source')
       expect(toolNames).toContain('list-skeletons')
       expect(toolNames).toContain('read-skeleton')
+      const symbolSourceTool = tools.tools.find(
+        tool => tool.name === 'get-symbol-source',
+      )
+      expect(symbolSourceTool?.inputSchema).toBeTruthy()
+      expect(
+        (symbolSourceTool?.inputSchema as Record<string, unknown> | undefined)?.anyOf,
+      ).toBeUndefined()
+      expect(
+        Object.keys(
+          (symbolSourceTool?.inputSchema as {
+            properties?: Record<string, unknown>
+          } | undefined)?.properties ?? {},
+        ),
+      ).toEqual(
+        expect.arrayContaining(['moduleId', 'path', 'qualifiedName', 'rootDir', 'symbolId']),
+      )
 
       const edges = await client.callTool({
         name: 'search-edges',

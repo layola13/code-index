@@ -241,7 +241,6 @@ const TOOLS: ToolDefinition[] = [
         symbolId: { type: 'string' },
         qualifiedName: { type: 'string' },
       },
-      anyOf: [{ required: ['symbolId'] }, { required: ['qualifiedName'] }],
       additionalProperties: false,
     },
   },
