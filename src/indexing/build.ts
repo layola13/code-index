@@ -279,6 +279,7 @@ async function parseExpandedUnits(args: {
   parseWorkers: number;
   previousModulesByPath: Map<string, ModuleIR>;
   removedModulePaths: Set<string>;
+  cleanupPaths: string[];
 }> {
   const expandedEntries: ExpandedUnit[] = []
   const expandYieldState = createYieldState()
@@ -408,6 +409,7 @@ async function parseExpandedUnits(args: {
         parseWorkers: 0,
         previousModulesByPath,
         removedModulePaths,
+        cleanupPaths,
       }
     }
 
@@ -440,6 +442,7 @@ async function parseExpandedUnits(args: {
         parseWorkers: 1,
         previousModulesByPath,
         removedModulePaths,
+        cleanupPaths,
       }
     }
 
@@ -474,6 +477,7 @@ async function parseExpandedUnits(args: {
         parseWorkers: workerCount,
         previousModulesByPath,
         removedModulePaths,
+        cleanupPaths,
       }
     } catch {
       await parseProgress.reset()
@@ -500,10 +504,12 @@ async function parseExpandedUnits(args: {
         parseWorkers: 1,
         previousModulesByPath,
         removedModulePaths,
+        cleanupPaths,
       }
     }
-  } finally {
+  } catch (error) {
     await cleanupTemporaryPaths(cleanupPaths)
+    throw error
   }
 }
 
@@ -659,7 +665,6 @@ async function buildCodeIndexWithDiscovery(
   });
   const parseMs = performance.now() - parseStartedAt;
   const modules = parsed.modules;
-
   const emitSkeletonStartedAt = performance.now();
   await emitSkeletonTree({
     modules,
@@ -683,87 +688,91 @@ async function buildCodeIndexWithDiscovery(
   let manifest: CodeIndexManifest;
   let skillPaths: CodeIndexSkillPaths;
 
-  if (reusedOutputs) {
-    manifest = reusedOutputs.manifest;
-  } else {
-    await reportProgress(config.onProgress, {
-      phase: "edges",
-      message: `Building dependency edges for ${modules.length} modules`,
-      completed: modules.length,
-      total: modules.length,
-    });
-    const buildEdgesStartedAt = performance.now();
-    const edges = await buildEdges(modules);
-    buildEdgesMs = performance.now() - buildEdgesStartedAt;
+  try {
+    if (reusedOutputs) {
+      manifest = reusedOutputs.manifest;
+    } else {
+      await reportProgress(config.onProgress, {
+        phase: "edges",
+        message: `Building dependency edges for ${modules.length} modules`,
+        completed: modules.length,
+        total: modules.length,
+      });
+      const buildEdgesStartedAt = performance.now();
+      const edges = await buildEdges(modules);
+      buildEdgesMs = performance.now() - buildEdgesStartedAt;
 
+      await reportProgress(config.onProgress, {
+        phase: "write",
+        message: `Writing code index artifacts`,
+        completed: modules.length,
+        total: modules.length,
+      });
+      const writeIndexFilesStartedAt = performance.now();
+      manifest = await writeIndexFiles({
+        edges,
+        fileLimitReached: discovery.fileLimitReached,
+        maxFiles: config.maxFiles,
+        modules,
+        outputDir: config.outputDir,
+        rootDir: config.rootDir,
+      });
+      writeIndexFilesMs = performance.now() - writeIndexFilesStartedAt;
+    }
     await reportProgress(config.onProgress, {
-      phase: "write",
-      message: `Writing code index artifacts`,
-      completed: modules.length,
-      total: modules.length,
+      phase: "skills",
+      message: `Refreshing code-index skills`,
     });
-    const writeIndexFilesStartedAt = performance.now();
-    manifest = await writeIndexFiles({
-      edges,
-      fileLimitReached: discovery.fileLimitReached,
-      maxFiles: config.maxFiles,
-      modules,
+    const writeSkillsStartedAt = performance.now();
+    skillPaths = await writeCodeIndexSkills({
       outputDir: config.outputDir,
       rootDir: config.rootDir,
     });
-    writeIndexFilesMs = performance.now() - writeIndexFilesStartedAt;
+    writeSkillsMs = performance.now() - writeSkillsStartedAt;
+
+    const gitignoreEntries = resolveCodeIndexGitignoreEntries({
+      outputDir: config.outputDir,
+      rootDir: config.rootDir,
+      skillPaths: [
+        skillPaths.claude,
+        skillPaths.codex,
+        skillPaths.opencode,
+      ],
+    });
+    await ensureCodeIndexGitignore({
+      entries: gitignoreEntries,
+      rootDir: config.rootDir,
+    });
+
+    const totalMs = performance.now() - totalStartedAt;
+    await reportProgress(config.onProgress, {
+      phase: "complete",
+      message: `Code index ready in ${Math.round(totalMs)}ms`,
+      completed: manifest.moduleCount,
+      total: manifest.moduleCount,
+    });
+
+    return {
+      engine: args.engine,
+      fileLimitReached: discovery.fileLimitReached,
+      incremental: parsed.incremental,
+      maxFiles: config.maxFiles,
+      manifest,
+      outputDir: config.outputDir,
+      parseWorkers: parsed.parseWorkers,
+      rootDir: config.rootDir,
+      skillPaths,
+      timings: {
+        buildEdgesMs,
+        discoverMs,
+        emitSkeletonMs,
+        parseMs,
+        totalMs,
+        writeIndexFilesMs,
+        writeSkillsMs,
+      },
+    };
+  } finally {
+    await cleanupTemporaryPaths(parsed.cleanupPaths)
   }
-  await reportProgress(config.onProgress, {
-    phase: "skills",
-    message: `Refreshing code-index skills`,
-  });
-  const writeSkillsStartedAt = performance.now();
-  skillPaths = await writeCodeIndexSkills({
-    outputDir: config.outputDir,
-    rootDir: config.rootDir,
-  });
-  writeSkillsMs = performance.now() - writeSkillsStartedAt;
-
-  const gitignoreEntries = resolveCodeIndexGitignoreEntries({
-    outputDir: config.outputDir,
-    rootDir: config.rootDir,
-    skillPaths: [
-      skillPaths.claude,
-      skillPaths.codex,
-      skillPaths.opencode,
-    ],
-  });
-  await ensureCodeIndexGitignore({
-    entries: gitignoreEntries,
-    rootDir: config.rootDir,
-  });
-
-  const totalMs = performance.now() - totalStartedAt;
-  await reportProgress(config.onProgress, {
-    phase: "complete",
-    message: `Code index ready in ${Math.round(totalMs)}ms`,
-    completed: manifest.moduleCount,
-    total: manifest.moduleCount,
-  });
-
-  return {
-    engine: args.engine,
-    fileLimitReached: discovery.fileLimitReached,
-    incremental: parsed.incremental,
-    maxFiles: config.maxFiles,
-    manifest,
-    outputDir: config.outputDir,
-    parseWorkers: parsed.parseWorkers,
-    rootDir: config.rootDir,
-    skillPaths,
-    timings: {
-      buildEdgesMs,
-      discoverMs,
-      emitSkeletonMs,
-      parseMs,
-      totalMs,
-      writeIndexFilesMs,
-      writeSkillsMs,
-    },
-  };
 }

@@ -136,11 +136,18 @@ any Codex-specific hook wiring.
 - `read-artifact`
 - `search-modules`
 - `search-symbols`
+- `search-edges`
+- `get-symbol-source`
+- `list-skeletons`
+- `read-skeleton`
 - `describe-index`
 
 `search` 直接扫描源代码文本。可以用 `|` 表示多个条件的“或”，也可以在末尾加 `in <scope>` 来限制到仓库内的某个路径前缀。
+`search` 还支持 `caseSensitive`、`contextLines`、`pathGlob`、`excludeGlob`、`language` 和 `maxLinesPerFile`。
 
 `search` 适合查代码内容、符号上下文、调用点、配置文本和实现细节。只有在你只想做文件名或目录名的模糊匹配时，才使用 Codex 的文件搜索。
+
+`search-edges` 用于查依赖和调用边，支持 `incoming`、`outgoing` 和 `both`。`get-symbol-source` 会直接返回符号对应的源码片段和行号。`list-skeletons` 与 `read-skeleton` 则用于浏览生成的 `skeleton/` 目录，不用手猜路径。
 
 路由规则：
 

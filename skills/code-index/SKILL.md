@@ -14,6 +14,7 @@ when_to_use: "Use this as a blocking first step when a code index already exists
 - Browse `./.code_index/skeleton/` when you need method-level detail; skeleton functions include concise stub calls instead of full method bodies.
 - Treat the code index and skeleton as a code map only. After they identify candidate files, read the original source before asserting implementation details, quoting behavior, or editing code.
 - Use `./.code_index/index/modules.jsonl` and `./.code_index/index/symbols.jsonl` only when you need exact module or symbol-level detail.
+- Use the dedicated edge and skeleton helpers when available: `search-edges` for incoming/outgoing dependency or call lookups, `get-symbol-source` for symbol snippets and line ranges, and `list-skeletons` / `read-skeleton` for method-level browsing.
 - In large repositories, you must use this index before broad repo-wide Grep/Glob scans or raw source-file sweeps until the index proves stale or the needed detail is missing.
 - If a file is missing from the DOT, no internal file-level dependency edge was resolved for it; jump straight to the skeleton or JSON index.
 - The skeleton is valid Python with lightweight call stubs, inheritance, and constructor assignments for easier grep and AST-based lookup.

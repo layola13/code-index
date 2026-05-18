@@ -318,6 +318,76 @@ function buildModuleAliasMap(modules: readonly ModuleIR[]): Map<string, string> 
   return aliasMap
 }
 
+function buildModulePathById(modules: readonly ModuleIR[]): Map<string, string> {
+  const modulePathById = new Map<string, string>()
+  for (const module of modules) {
+    modulePathById.set(module.moduleId, module.relativePath)
+  }
+  return modulePathById
+}
+
+type SymbolPathIndex = {
+  exact: Map<string, string>
+  local: Map<string, string>
+}
+
+function localSymbolName(qualifiedName: string): string {
+  const separatorIndex = qualifiedName.indexOf('::')
+  return separatorIndex >= 0
+    ? qualifiedName.slice(separatorIndex + 2)
+    : qualifiedName
+}
+
+function addUniquePath(
+  index: Map<string, string | null>,
+  key: string,
+  path: string,
+): void {
+  const current = index.get(key)
+  if (current === undefined) {
+    index.set(key, path)
+    return
+  }
+  if (current !== path) {
+    index.set(key, null)
+  }
+}
+
+function buildSymbolPathIndex(modules: readonly ModuleIR[]): SymbolPathIndex {
+  const exact = new Map<string, string>()
+  const localCandidates = new Map<string, string | null>()
+
+  for (const module of modules) {
+    for (const cls of module.classes) {
+      addUniquePath(exact, cls.qualifiedName, module.relativePath)
+      addUniquePath(localCandidates, localSymbolName(cls.qualifiedName), module.relativePath)
+
+      for (const method of cls.methods) {
+        addUniquePath(exact, method.qualifiedName, module.relativePath)
+        addUniquePath(
+          localCandidates,
+          localSymbolName(method.qualifiedName),
+          module.relativePath,
+        )
+      }
+    }
+
+    for (const fn of module.functions) {
+      addUniquePath(exact, fn.qualifiedName, module.relativePath)
+      addUniquePath(localCandidates, localSymbolName(fn.qualifiedName), module.relativePath)
+    }
+  }
+
+  const local = new Map<string, string>()
+  for (const [name, path] of localCandidates.entries()) {
+    if (typeof path === 'string') {
+      local.set(name, path)
+    }
+  }
+
+  return { exact, local }
+}
+
 function resolveRelativePathSpecifier(
   currentRelativePath: string,
   specifier: string,
@@ -458,6 +528,29 @@ async function buildFileDependencyEdges(
   })
 }
 
+function resolveEdgeTargetFile(args: {
+  aliasMap: ReadonlyMap<string, string>
+  edge: EdgeIR
+  symbolPathIndex: SymbolPathIndex
+}): string | undefined {
+  if (args.edge.targetFile) {
+    return args.edge.targetFile
+  }
+
+  if (args.edge.kind === 'imports') {
+    return resolveImportToModulePath({
+      aliasMap: args.aliasMap,
+      importerPath: args.edge.sourceFile,
+      specifier: args.edge.target,
+    }) ?? undefined
+  }
+
+  return (
+    args.symbolPathIndex.exact.get(args.edge.target) ??
+    args.symbolPathIndex.local.get(args.edge.target)
+  )
+}
+
 function escapeDotLabel(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
@@ -535,6 +628,8 @@ export async function writeIndexFiles(args: {
   await writeFile(join(indexDir, 'modules.jsonl'), moduleLines.join('\n') + '\n', 'utf8')
 
   const symbolLines: string[] = []
+  const symbolPathIndex = buildSymbolPathIndex(args.modules)
+  const aliasMap = buildModuleAliasMap(args.modules)
   const yieldState = createYieldState()
   for (const module of args.modules) {
     await maybeYieldToEventLoop(yieldState)
@@ -579,7 +674,16 @@ export async function writeIndexFiles(args: {
   }
   await writeFile(join(indexDir, 'symbols.jsonl'), symbolLines.join('\n') + '\n', 'utf8')
 
-  const edgeLines = args.edges.map(edge => JSON.stringify(edge))
+  const edgeLines = args.edges.map(edge =>
+    JSON.stringify({
+      ...edge,
+      targetFile: resolveEdgeTargetFile({
+        aliasMap,
+        edge,
+        symbolPathIndex,
+      }),
+    }),
+  )
   await writeFile(join(indexDir, 'edges.jsonl'), edgeLines.join('\n') + '\n', 'utf8')
 
   await writeFile(

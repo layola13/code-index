@@ -13,7 +13,7 @@ export type CodeLanguage =
   | 'saasm'
   | 'generic'
 
-export const CODE_INDEX_ARTIFACT_VERSION = 2
+export const CODE_INDEX_ARTIFACT_VERSION = 3
 
 export type EdgeKind = 'imports' | 'calls' | 'inherits' | 'depends_on'
 
@@ -86,6 +86,7 @@ export type EdgeIR = {
   sourceSymbol?: string
   lineStart?: number
   lineEnd?: number
+  targetFile?: string
   metadata?: Record<string, string | number | boolean>
 }
 

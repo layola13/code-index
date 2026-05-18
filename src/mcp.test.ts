@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -235,6 +235,125 @@ describe('mcp server', () => {
       await transport.close()
       await rm(root, { recursive: true, force: true })
       await rm(pluginRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('exposes edge, symbol source, and skeleton tools', async () => {
+    const root = await createTempRepo({
+      'src/a.ts': [
+        'export function foo() {',
+        '  return 1',
+        '}',
+        '',
+      ].join('\n'),
+      'src/b.ts': [
+        'import { foo } from "./a"',
+        'export function bar() {',
+        '  return foo()',
+        '}',
+        '',
+      ].join('\n'),
+    })
+
+    const transport = new StdioClientTransport({
+      command: 'bun',
+      args: ['run', 'src/mcp.ts'],
+      cwd: process.cwd(),
+      stderr: 'pipe',
+    })
+    const client = new Client({
+      name: 'code-index-test',
+      version: '0.0.0',
+    })
+
+    try {
+      await client.connect(transport)
+
+      const tools = await client.listTools()
+      const toolNames = tools.tools.map(tool => tool.name)
+      expect(toolNames).toContain('search-edges')
+      expect(toolNames).toContain('get-symbol-source')
+      expect(toolNames).toContain('list-skeletons')
+      expect(toolNames).toContain('read-skeleton')
+
+      const edges = await client.callTool({
+        name: 'search-edges',
+        arguments: {
+          rootDir: root,
+          direction: 'incoming',
+          target: 'src/a.ts',
+          limit: 10,
+        },
+      })
+      const parsedEdges = parseToolResult<{
+        count: number
+        items: Array<{ edgeId: string; targetModulePath?: string }>
+      }>(edges)
+      expect(parsedEdges.count).toBeGreaterThanOrEqual(1)
+      expect(parsedEdges.items.some(item => item.targetModulePath === 'src/a.ts')).toBe(true)
+
+      const symbols = await client.callTool({
+        name: 'search-symbols',
+        arguments: {
+          rootDir: root,
+          query: 'foo',
+          limit: 10,
+        },
+      })
+      const parsedSymbols = parseToolResult<{
+        items: Array<{
+          item: { module_id: string; qualified_name: string; symbol_id: string }
+          score: number
+        }>
+      }>(symbols)
+      const fooSymbol =
+        parsedSymbols.items.find(item =>
+          item.item.qualified_name.includes('foo'),
+        ) ?? parsedSymbols.items[0]
+      expect(fooSymbol).toBeTruthy()
+
+      const symbolSource = await client.callTool({
+        name: 'get-symbol-source',
+        arguments: {
+          rootDir: root,
+          symbolId: fooSymbol?.item.symbol_id,
+        },
+      })
+      const parsedSymbolSource = parseToolResult<{
+        sourcePath: string
+        snippet: string
+      }>(symbolSource)
+      expect(parsedSymbolSource.sourcePath).toBe('src/a.ts')
+      expect(parsedSymbolSource.snippet).toContain('export function foo()')
+
+      const listSkeletons = await client.callTool({
+        name: 'list-skeletons',
+        arguments: {
+          rootDir: root,
+        },
+      })
+      const parsedSkeletons = parseToolResult<{
+        items: Array<{ path: string }>
+      }>(listSkeletons)
+      expect(parsedSkeletons.items.some(item => item.path.endsWith('a.py'))).toBe(true)
+
+      const readSkeleton = await client.callTool({
+        name: 'read-skeleton',
+        arguments: {
+          rootDir: root,
+          path: 'a',
+        },
+      })
+      const parsedSkeleton = parseToolResult<{
+        path: string
+        content: string
+      }>(readSkeleton)
+      expect(parsedSkeleton.path).toContain('skeleton')
+      expect(parsedSkeleton.content).toContain('def foo')
+    } finally {
+      await client.close()
+      await transport.close()
+      await rm(root, { recursive: true, force: true })
     }
   })
 })

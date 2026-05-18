@@ -68,6 +68,7 @@ describe('source search', () => {
       expect(result.query.scope).toBe('src')
       expect(result.count).toBe(2)
       expect(result.totalCount).toBe(2)
+      expect(result.hitCount).toBeGreaterThan(2)
       expect(result.items.map(item => item.path).sort()).toEqual([
         'src/index.ts',
         'src/nested/tools.ts',
@@ -105,6 +106,45 @@ describe('source search', () => {
       })
 
       expect(result.items.map(item => item.path)).toEqual(['src/visible.ts'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('supports case sensitivity, glob filters, context lines, and per-file line limits', async () => {
+    const root = await createTempRepo({
+      'src/visible.ts': [
+        'export const Alpha = 1',
+        'export const beta = Alpha + 1',
+        'export const gamma = beta + Alpha',
+        '',
+      ].join('\n'),
+      'src/visible.test.ts': [
+        'export const Alpha = 2',
+        '',
+      ].join('\n'),
+      'src/ignored.ts': [
+        'export const Alpha = 3',
+        '',
+      ].join('\n'),
+    })
+
+    try {
+      const result = await searchSourceFiles({
+        query: 'Alpha',
+        rootDir: root,
+        caseSensitive: true,
+        pathGlob: ['src/**/*.ts'],
+        excludeGlob: ['**/*.test.ts', 'src/ignored.ts'],
+        contextLines: 1,
+        maxLinesPerFile: 1,
+      })
+
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]?.path).toBe('src/visible.ts')
+      expect(result.items[0]?.matches).toHaveLength(1)
+      expect(result.items[0]?.matches[0]?.context.length).toBeGreaterThan(1)
+      expect(result.items[0]?.matches[0]?.context.some(line => line.text.includes('beta'))).toBe(true)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

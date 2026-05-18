@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import {
+  getSymbolSource,
+  listSkeletons,
+  readSkeleton,
+  searchEdges,
   searchModules,
   searchSymbols,
+  type EdgeIndexRecord,
   type ModuleIndexRecord,
   type SymbolIndexRecord,
 } from './artifacts.js'
@@ -19,6 +24,50 @@ async function createTempIndex(
   await writeFile(join(indexDir, 'modules.jsonl'), modules.map(m => JSON.stringify(m)).join('\n') + '\n', 'utf8')
   await writeFile(join(indexDir, 'symbols.jsonl'), symbols.map(s => JSON.stringify(s)).join('\n') + '\n', 'utf8')
   await writeFile(join(indexDir, 'edges.jsonl'), '', 'utf8')
+  return root
+}
+
+async function createTempArtifactRepo(args: {
+  edges?: EdgeIndexRecord[]
+  modules: ModuleIndexRecord[]
+  skeletons?: Record<string, string>
+  sourceFiles?: Record<string, string>
+  symbols: SymbolIndexRecord[]
+}): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'code-index-artifacts-'))
+  const indexDir = join(root, 'index')
+  const skeletonDir = join(root, 'skeleton')
+  await mkdir(indexDir, { recursive: true })
+  await mkdir(skeletonDir, { recursive: true })
+  await writeFile(
+    join(indexDir, 'modules.jsonl'),
+    args.modules.map(module => JSON.stringify(module)).join('\n') + '\n',
+    'utf8',
+  )
+  await writeFile(
+    join(indexDir, 'symbols.jsonl'),
+    args.symbols.map(symbol => JSON.stringify(symbol)).join('\n') + '\n',
+    'utf8',
+  )
+  await writeFile(
+    join(indexDir, 'edges.jsonl'),
+    (args.edges ?? []).map(edge => JSON.stringify(edge)).join('\n') + '\n',
+    'utf8',
+  )
+  await writeFile(join(skeletonDir, '__root__.py'), '...\n', 'utf8')
+
+  for (const [relativePath, content] of Object.entries(args.skeletons ?? {})) {
+    const absolutePath = join(skeletonDir, relativePath)
+    await mkdir(dirname(absolutePath), { recursive: true })
+    await writeFile(absolutePath, content, 'utf8')
+  }
+
+  for (const [relativePath, content] of Object.entries(args.sourceFiles ?? {})) {
+    const absolutePath = join(root, relativePath)
+    await mkdir(dirname(absolutePath), { recursive: true })
+    await writeFile(absolutePath, content, 'utf8')
+  }
+
   return root
 }
 
@@ -49,6 +98,19 @@ function symbolRecord(
     signature: overrides.signature,
     source_lines: overrides.source_lines ?? { start: 1, end: 1 },
     symbol_id: overrides.symbol_id,
+    ...overrides,
+  }
+}
+
+function edgeRecord(
+  overrides: Partial<EdgeIndexRecord> & Pick<EdgeIndexRecord, 'edgeId' | 'kind' | 'source' | 'sourceFile' | 'target'>,
+): EdgeIndexRecord {
+  return {
+    edgeId: overrides.edgeId,
+    kind: overrides.kind,
+    source: overrides.source,
+    sourceFile: overrides.sourceFile,
+    target: overrides.target,
     ...overrides,
   }
 }
@@ -135,5 +197,163 @@ describe('search modes', () => {
     await expect(
       searchSymbols(root, { query: 'alpha', queryMode: 'bogus', limit: 10 }),
     ).rejects.toThrow(/unsupported queryMode/)
+  })
+})
+
+describe('edge and artifact helpers', () => {
+  it('searches edges, resolves symbol source snippets, and reads skeleton files', async () => {
+    const root = await createTempArtifactRepo({
+      modules: [
+        moduleRecord({ module_id: 'a', path: 'src/a.ts', lang: 'ts' }),
+        moduleRecord({ module_id: 'b', path: 'src/b.ts', lang: 'ts' }),
+      ],
+      symbols: [
+        symbolRecord({
+          kind: 'function',
+          module_id: 'a',
+          qualified_name: 'a::foo',
+          signature: 'foo(): number',
+          source_lines: { start: 1, end: 3 },
+          symbol_id: 'a::foo',
+        }),
+        symbolRecord({
+          kind: 'function',
+          module_id: 'b',
+          qualified_name: 'b::bar',
+          signature: 'bar(): number',
+          source_lines: { start: 1, end: 1 },
+          symbol_id: 'b::bar',
+        }),
+      ],
+      edges: [
+        edgeRecord({
+          edgeId: 'edge-1',
+          kind: 'imports',
+          source: 'a',
+          sourceFile: 'src/a.ts',
+          target: './b.ts',
+          targetFile: 'src/b.ts',
+        }),
+        edgeRecord({
+          edgeId: 'edge-2',
+          kind: 'calls',
+          source: 'a::foo',
+          sourceFile: 'src/a.ts',
+          sourceSymbol: 'a::foo',
+          target: 'b::bar',
+          targetFile: 'src/b.ts',
+          lineStart: 1,
+          lineEnd: 3,
+        }),
+      ],
+      skeletons: {
+        'src/a.py': 'class A:\n    pass\n',
+        'src/nested/b.py': 'def b():\n    ...\n',
+      },
+      sourceFiles: {
+        'src/a.ts': [
+          'export function foo() {',
+          '  return 1',
+          '}',
+          '',
+        ].join('\n'),
+        'src/b.ts': [
+          'export function bar() {',
+          '  return 2',
+          '}',
+          '',
+        ].join('\n'),
+      },
+    })
+
+    try {
+      const incoming = await searchEdges(root, {
+        direction: 'incoming',
+        target: 'src/b.ts',
+        limit: 10,
+      })
+      expect(incoming.totalCount).toBe(2)
+      expect(incoming.items.map(item => item.edgeId)).toEqual([
+        'edge-1',
+        'edge-2',
+      ])
+      expect(incoming.items.every(item => item.targetModulePath === 'src/b.ts')).toBe(true)
+      expect(incoming.items.every(item => item.sourceModulePath === 'src/a.ts')).toBe(true)
+
+      const callers = await searchEdges(root, {
+        sourceSymbol: 'a::foo',
+        limit: 10,
+      })
+      expect(callers.totalCount).toBe(1)
+      expect(callers.items[0]?.edgeId).toBe('edge-2')
+      expect(callers.items[0]?.sourceSymbol).toBe('a::foo')
+
+      const symbolSource = await getSymbolSource(root, {
+        rootDir: root,
+        symbolId: 'a::foo',
+      })
+      expect(symbolSource.sourcePath).toBe('src/a.ts')
+      expect(symbolSource.path).toBe('src/a.ts')
+      expect(symbolSource.startLine).toBe(1)
+      expect(symbolSource.endLine).toBe(3)
+      expect(symbolSource.snippet).toContain('export function foo() {')
+
+      const skeletons = await listSkeletons(root)
+      expect(skeletons.map(item => item.path)).toEqual([
+        'skeleton/__root__.py',
+        'skeleton/src/a.py',
+        'skeleton/src/nested/b.py',
+      ])
+
+      const skeleton = await readSkeleton(root, { path: 'nested/b' })
+      expect(skeleton.path).toBe('skeleton/src/nested/b.py')
+      expect(skeleton.content).toContain('def b():')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('searchEdges respects incoming and outgoing direction filtering', async () => {
+    const root = await createTempArtifactRepo({
+      modules: [
+        moduleRecord({ module_id: 'a', path: 'src/a.ts', lang: 'ts' }),
+        moduleRecord({ module_id: 'b', path: 'src/b.ts', lang: 'ts' }),
+      ],
+      symbols: [],
+      edges: [
+        edgeRecord({
+          edgeId: 'edge-1',
+          kind: 'imports',
+          source: 'a',
+          sourceFile: 'src/a.ts',
+          target: './b.ts',
+          targetFile: 'src/b.ts',
+        }),
+        edgeRecord({
+          edgeId: 'edge-2',
+          kind: 'imports',
+          source: 'b',
+          sourceFile: 'src/b.ts',
+          target: './a.ts',
+          targetFile: 'src/a.ts',
+        }),
+      ],
+    })
+
+    try {
+      const incoming = await searchEdges(root, {
+        direction: 'incoming',
+        target: 'src/b.ts',
+      })
+      expect(incoming.items.map(item => item.edgeId)).toEqual(['edge-1'])
+
+      const outgoing = await searchEdges(root, {
+        direction: 'outgoing',
+        source: 'src/a.ts',
+      })
+      expect(outgoing.items.map(item => item.edgeId)).toEqual(['edge-1'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

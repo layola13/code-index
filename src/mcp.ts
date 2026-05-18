@@ -11,9 +11,13 @@ import { ensureIndexArtifacts } from './indexing/ensureIndex.js'
 import { formatStartupIndexSummary } from './indexing/startupIndex.js'
 import {
   getIndexArtifactSummary,
+  getSymbolSource,
   readArtifactText,
+  readSkeleton,
   resolveIndexOutputDir,
   SEARCH_TEXT_MODES,
+  listSkeletons,
+  searchEdges,
   searchModules,
   searchSymbols,
 } from './artifacts.js'
@@ -26,6 +30,7 @@ type ToolDefinition = {
   description: string
   inputSchema: {
     additionalProperties?: boolean
+    anyOf?: Array<Record<string, unknown>>
     properties?: Record<string, object>
     required?: string[]
     type: 'object'
@@ -37,7 +42,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'search',
     description:
-      'Search raw source text directly. Use this for code content, symbols in context, call sites, config values, log strings, implementation details, and multi-term pattern queries like A|B|C. Do not use it for filename-only fuzzy matching; use Codex file search for that. Use | for OR across terms and append "in <scope>" to restrict results to a repo-relative path prefix. Terms are treated as regex patterns.',
+      'Search raw source text directly. Use this for code content, symbols in context, call sites, config values, log strings, implementation details, and multi-term pattern queries like A|B|C. Do not use it for filename-only fuzzy matching; use Codex file search for that. Use | for OR across terms and append "in <scope>" to restrict results to a repo-relative path prefix. Terms are treated as regex patterns. Optional filters include caseSensitive, contextLines, pathGlob, excludeGlob, language, and maxLinesPerFile.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -52,6 +57,34 @@ const TOOLS: ToolDefinition[] = [
           type: 'number',
           minimum: 1,
           description: 'Maximum number of files to return',
+        },
+        caseSensitive: {
+          type: 'boolean',
+          description: 'Match source terms with exact case instead of lowercasing first',
+        },
+        contextLines: {
+          type: 'number',
+          minimum: 0,
+          description: 'Number of surrounding lines to include around each hit',
+        },
+        pathGlob: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional glob filters to include only matching file paths',
+        },
+        excludeGlob: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional glob filters to exclude matching file paths',
+        },
+        language: {
+          type: 'string',
+          description: 'Optional language filter such as typescript, python, or go',
+        },
+        maxLinesPerFile: {
+          type: 'number',
+          minimum: 1,
+          description: 'Maximum number of distinct matched lines to include per file',
         },
       },
       required: ['query'],
@@ -169,6 +202,74 @@ const TOOLS: ToolDefinition[] = [
         path: { type: 'string' },
         limit: { type: 'number', minimum: 1 },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search-edges',
+    description:
+      'Search dependency/call edges in edges.jsonl by source, target, kind, symbol, and direction. Use this for incoming/outgoing file and symbol impact lookups without reading the full edge artifact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rootDir: { type: 'string' },
+        outputDir: { type: 'string' },
+        direction: {
+          type: 'string',
+          enum: ['incoming', 'outgoing', 'both'],
+        },
+        kind: { type: 'string' },
+        source: { type: 'string' },
+        sourceSymbol: { type: 'string' },
+        target: { type: 'string' },
+        limit: { type: 'number', minimum: 1 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get-symbol-source',
+    description:
+      'Return the snippet for a matched symbol directly from the source artifact, including its line range. Use this after search-symbols to avoid a second manual read. Provide symbolId or qualifiedName, and optionally moduleId or path to narrow the lookup.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rootDir: { type: 'string' },
+        outputDir: { type: 'string' },
+        moduleId: { type: 'string' },
+        path: { type: 'string' },
+        symbolId: { type: 'string' },
+        qualifiedName: { type: 'string' },
+      },
+      anyOf: [{ required: ['symbolId'] }, { required: ['qualifiedName'] }],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list-skeletons',
+    description:
+      'List all skeleton files under the generated skeleton/ tree so callers do not need to guess paths.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rootDir: { type: 'string' },
+        outputDir: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'read-skeleton',
+    description:
+      'Read a skeleton file by fuzzy path match inside the generated skeleton/ tree.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rootDir: { type: 'string' },
+        outputDir: { type: 'string' },
+        path: { type: 'string' },
+      },
+      required: ['path'],
       additionalProperties: false,
     },
   },
@@ -342,6 +443,12 @@ async function handleSearch(args: unknown): Promise<CallToolResult> {
     query,
     limit: getNumberArg(args, 'limit'),
     outputDir,
+    contextLines: getNumberArg(args, 'contextLines'),
+    caseSensitive: (args as Record<string, unknown>)?.caseSensitive === true,
+    language: getStringArg(args, 'language'),
+    maxLinesPerFile: getNumberArg(args, 'maxLinesPerFile'),
+    pathGlob: getStringArrayArg(args, 'pathGlob'),
+    excludeGlob: getStringArrayArg(args, 'excludeGlob'),
     rootDir,
   })
 
@@ -402,6 +509,104 @@ async function handleSearchSymbols(args: unknown): Promise<CallToolResult> {
   })
 }
 
+async function handleSearchEdges(args: unknown): Promise<CallToolResult> {
+  const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
+  const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
+  await ensureIndexArtifacts({
+    outputDir,
+    requiredArtifacts: [
+      'index/manifest.json',
+      'index/modules.jsonl',
+      'index/edges.jsonl',
+    ],
+    rootDir,
+  })
+
+  const result = await searchEdges(outputDir, {
+    direction: getStringArg(args, 'direction'),
+    kind: getStringArg(args, 'kind'),
+    source: getStringArg(args, 'source'),
+    sourceSymbol: getStringArg(args, 'sourceSymbol'),
+    target: getStringArg(args, 'target'),
+    limit: getNumberArg(args, 'limit'),
+  })
+
+  return jsonResult({
+    outputDir,
+    ...result,
+  })
+}
+
+async function handleGetSymbolSource(args: unknown): Promise<CallToolResult> {
+  const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
+  const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
+  const symbolId = getStringArg(args, 'symbolId')
+  const qualifiedName = getStringArg(args, 'qualifiedName')
+  if (!symbolId && !qualifiedName) {
+    return errorResult('Missing required argument: symbolId or qualifiedName')
+  }
+  await ensureIndexArtifacts({
+    outputDir,
+    requiredArtifacts: [
+      'index/manifest.json',
+      'index/modules.jsonl',
+      'index/symbols.jsonl',
+    ],
+    rootDir,
+  })
+
+  const result = await getSymbolSource(outputDir, {
+    rootDir,
+    moduleId: getStringArg(args, 'moduleId'),
+    path: getStringArg(args, 'path'),
+    symbolId,
+    qualifiedName,
+  })
+
+  return jsonResult({
+    outputDir,
+    ...result,
+  })
+}
+
+async function handleListSkeletons(args: unknown): Promise<CallToolResult> {
+  const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
+  const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
+  await ensureIndexArtifacts({
+    outputDir,
+    requiredArtifacts: ['index/manifest.json', 'skeleton/__root__.py'],
+    rootDir,
+  })
+
+  const items = await listSkeletons(outputDir)
+  return jsonResult({
+    count: items.length,
+    items,
+    outputDir,
+  })
+}
+
+async function handleReadSkeleton(args: unknown): Promise<CallToolResult> {
+  const path = getStringArg(args, 'path')
+  if (!path) {
+    return errorResult('Missing required argument: path')
+  }
+
+  const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
+  const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
+  await ensureIndexArtifacts({
+    outputDir,
+    requiredArtifacts: ['index/manifest.json', 'skeleton/__root__.py'],
+    rootDir,
+  })
+
+  const item = await readSkeleton(outputDir, { path })
+  return jsonResult({
+    outputDir,
+    ...item,
+  })
+}
+
 export async function startMcpServer(): Promise<void> {
   const server = new Server(
     {
@@ -440,6 +645,14 @@ export async function startMcpServer(): Promise<void> {
           return await handleSearchModules(args)
         case 'search-symbols':
           return await handleSearchSymbols(args)
+        case 'search-edges':
+          return await handleSearchEdges(args)
+        case 'get-symbol-source':
+          return await handleGetSymbolSource(args)
+        case 'list-skeletons':
+          return await handleListSkeletons(args)
+        case 'read-skeleton':
+          return await handleReadSkeleton(args)
         case 'describe-index':
           return await handleDescribeIndex(args)
         default:

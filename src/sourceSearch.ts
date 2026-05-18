@@ -18,6 +18,10 @@ export type ParsedSourceSearchQuery = {
 
 export type SourceSearchLineMatch = {
   line: number
+  context: Array<{
+    line: number
+    text: string
+  }>
   matchedTerms: string[]
   snippet: string
 }
@@ -44,9 +48,15 @@ export type SourceSearchResult = {
 }
 
 export type SourceSearchOptions = {
+  caseSensitive?: boolean
+  contextLines?: number
   limit?: number
   outputDir?: string
+  excludeGlob?: string[]
+  language?: string
+  maxLinesPerFile?: number
   query: string
+  pathGlob?: string[]
   rootDir?: string
 }
 
@@ -59,6 +69,13 @@ function clampLimit(limit: number | undefined, defaultLimit: number): number {
     return defaultLimit
   }
   return Math.min(Math.trunc(limit), 1000)
+}
+
+function clampContextLines(limit: number | undefined): number {
+  if (!Number.isFinite(limit) || limit === undefined || limit < 0) {
+    return 0
+  }
+  return Math.min(Math.trunc(limit), 20)
 }
 
 function normalizeScopePath(value: string): string {
@@ -82,6 +99,64 @@ function normalizeScopePath(value: string): string {
   }
 
   return normalized
+}
+
+function normalizeGlobPattern(value: string): string {
+  const normalized = value.trim().replaceAll('\\', '/')
+  if (!normalized) {
+    throw new Error('glob pattern cannot be empty')
+  }
+  return normalized
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const normalized = normalizeGlobPattern(pattern)
+  let regex = '^'
+
+  for (let index = 0; index < normalized.length; index++) {
+    const char = normalized[index] ?? ''
+    if (char === '*') {
+      if (normalized[index + 1] === '*') {
+        index++
+        if (normalized[index + 1] === '/') {
+          index++
+          regex += '(?:.*\\/)?'
+        } else {
+          regex += '.*'
+        }
+      } else {
+        regex += '[^/]*'
+      }
+      continue
+    }
+    if (char === '?') {
+      regex += '[^/]'
+      continue
+    }
+    regex += escapeRegexLiteral(char)
+  }
+
+  regex += '$'
+  return new RegExp(regex)
+}
+
+function compileGlobMatchers(patterns?: readonly string[]): RegExp[] {
+  return (patterns ?? [])
+    .map(pattern => pattern.trim())
+    .filter(Boolean)
+    .map(pattern => globToRegExp(pattern))
+}
+
+function matchesAnyGlob(value: string, matchers: readonly RegExp[]): boolean {
+  if (matchers.length === 0) {
+    return true
+  }
+  const normalized = value.replaceAll('\\', '/')
+  return matchers.some(regex => regex.test(normalized))
 }
 
 function splitTopLevelOrClauses(query: string): string[] {
@@ -216,11 +291,11 @@ export function parseSourceSearchQuery(query: string): ParsedSourceSearchQuery {
   return { raw, scope, terms }
 }
 
-function compileSearchTerm(term: string): SearchTerm {
+function compileSearchTerm(term: string, caseSensitive: boolean): SearchTerm {
   try {
     return {
       raw: term,
-      regex: new RegExp(term, 'giu'),
+      regex: new RegExp(term, caseSensitive ? 'gu' : 'giu'),
     }
   } catch (error) {
     throw new Error(
@@ -271,6 +346,28 @@ function buildSnippet(
   return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
 }
 
+function buildContextWindow(args: {
+  contextLines: number
+  lines: readonly string[]
+  matchedLine: number
+}): Array<{
+  line: number
+  text: string
+}> {
+  const startLine = Math.max(1, args.matchedLine - args.contextLines)
+  const endLine = Math.min(args.lines.length, args.matchedLine + args.contextLines)
+  const context: Array<{ line: number; text: string }> = []
+
+  for (let line = startLine; line <= endLine; line++) {
+    context.push({
+      line,
+      text: args.lines[line - 1]?.trimEnd() ?? '',
+    })
+  }
+
+  return context
+}
+
 function scoreMatch(args: {
   hitCount: number
   lineCount: number
@@ -284,9 +381,14 @@ function finalizeLineHit(hit: {
   line: number
   matchedTerms: Set<string>
   snippet: string
+  context: Array<{
+    line: number
+    text: string
+  }>
 }): SourceSearchLineMatch {
   return {
     line: hit.line,
+    context: hit.context,
     matchedTerms: [...hit.matchedTerms].sort((left, right) =>
       left.localeCompare(right),
     ),
@@ -298,7 +400,10 @@ export async function searchSourceFiles(
   options: SourceSearchOptions,
 ): Promise<SourceSearchResult> {
   const parsed = parseSourceSearchQuery(options.query)
-  const compiledTerms = parsed.terms.map(compileSearchTerm)
+  const caseSensitive = options.caseSensitive ?? false
+  const compiledTerms = parsed.terms.map(term =>
+    compileSearchTerm(term, caseSensitive),
+  )
   const config = resolveCodeIndexConfig({
     rootDir: options.rootDir,
     outputDir: options.outputDir,
@@ -306,6 +411,14 @@ export async function searchSourceFiles(
   const discovery = await discoverSourceFiles(config)
   const yieldState = createYieldState()
   const limit = clampLimit(options.limit, DEFAULT_SOURCE_SEARCH_LIMIT)
+  const maxLinesPerFile = clampLimit(
+    options.maxLinesPerFile,
+    DEFAULT_SOURCE_SEARCH_LINE_LIMIT,
+  )
+  const contextLines = clampContextLines(options.contextLines)
+  const pathGlobs = compileGlobMatchers(options.pathGlob)
+  const excludeGlobs = compileGlobMatchers(options.excludeGlob)
+  const language = options.language?.trim().toLowerCase()
   const items: SourceSearchFileMatch[] = []
   let hitCount = 0
 
@@ -315,12 +428,30 @@ export async function searchSourceFiles(
     if (parsed.scope && !matchesScope(file.relativePath, parsed.scope)) {
       continue
     }
+    if (pathGlobs.length > 0 && !matchesAnyGlob(file.relativePath, pathGlobs)) {
+      continue
+    }
+    if (excludeGlobs.length > 0 && matchesAnyGlob(file.relativePath, excludeGlobs)) {
+      continue
+    }
+    if (language && file.language.toLowerCase() !== language) {
+      continue
+    }
 
     const text = await readSourceTextForSearch(file.absolutePath)
     const lineStarts = computeLineStarts(text)
+    const sourceLines = text.split('\n')
     const lineHits = new Map<
       number,
-      { line: number; matchedTerms: Set<string>; snippet: string }
+      {
+        line: number
+        matchedTerms: Set<string>
+        snippet: string
+        context: Array<{
+          line: number
+          text: string
+        }>
+      }
     >()
     let fileHitCount = 0
 
@@ -337,8 +468,14 @@ export async function searchSourceFiles(
         const matchLength = match[0]?.length ?? 0
 
         fileHitCount++
+        hitCount++
         if (existing) {
           existing.matchedTerms.add(term.raw)
+          existing.context = buildContextWindow({
+            contextLines,
+            lines: sourceLines,
+            matchedLine: line,
+          })
           if (existing.snippet.length > SOURCE_SNIPPET_WIDTH) {
             existing.snippet = buildSnippet(
               lineText,
@@ -352,6 +489,11 @@ export async function searchSourceFiles(
         lineHits.set(line, {
           line,
           matchedTerms: new Set([term.raw]),
+          context: buildContextWindow({
+            contextLines,
+            lines: sourceLines,
+            matchedLine: line,
+          }),
           snippet: buildSnippet(lineText, matchIndexInLine, matchLength),
         })
       }
@@ -361,13 +503,13 @@ export async function searchSourceFiles(
       continue
     }
 
-    const lines = [...lineHits.values()].sort(
+    const hits = [...lineHits.values()].sort(
       (left, right) => left.line - right.line,
     )
-    const displayedLines = lines.slice(0, DEFAULT_SOURCE_SEARCH_LINE_LIMIT)
-    const truncated = lines.length > displayedLines.length
+    const displayedLines = hits.slice(0, maxLinesPerFile)
+    const truncated = hits.length > displayedLines.length
     const distinctTerms = new Set<string>()
-    for (const hit of lines) {
+    for (const hit of hits) {
       for (const term of hit.matchedTerms) {
         distinctTerms.add(term)
       }
@@ -375,13 +517,13 @@ export async function searchSourceFiles(
 
     items.push({
       language: file.language,
-      lineCount: lines.length,
+      lineCount: hits.length,
       matchCount: fileHitCount,
       path: file.relativePath,
       score: scoreMatch({
-        firstLine: lines[0]?.line ?? Number.MAX_SAFE_INTEGER,
+        firstLine: hits[0]?.line ?? Number.MAX_SAFE_INTEGER,
         hitCount: fileHitCount,
-        lineCount: lines.length,
+        lineCount: hits.length,
         termCount: distinctTerms.size,
       }),
       matches: displayedLines.map(finalizeLineHit),
