@@ -23,6 +23,7 @@ import {
   searchSymbols,
 } from './artifacts.js'
 import { errorMessage } from './utils/errors.js'
+import { searchHistoryEntries } from './historySearch.js'
 import { searchSourceFiles } from './sourceSearch.js'
 
 const SERVER_VERSION = '0.1.0'
@@ -86,6 +87,27 @@ const TOOLS: ToolDefinition[] = [
           type: 'number',
           minimum: 1,
           description: 'Maximum number of distinct matched lines to include per file',
+        },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search-history',
+    description:
+      'Search Codex chat history across rollout JSONL files under ~/.codex/sessions and ~/.codex/archived_sessions. The current conversation is searched first; if it matches, results are returned immediately without scanning older conversations. Terms are literal text joined with | and match visible user/assistant text only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Literal text terms separated by |.',
+        },
+        limit: {
+          type: 'number',
+          minimum: 1,
+          description: 'Maximum number of matching conversations to return',
         },
       },
       required: ['query'],
@@ -464,6 +486,29 @@ async function handleSearch(args: unknown, signal?: AbortSignal): Promise<CallTo
   return jsonResult(result)
 }
 
+async function handleSearchHistory(
+  args: unknown,
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
+  const query = getStringArg(args, 'query')
+  if (!query) {
+    return errorResult('Missing required argument: query')
+  }
+
+  try {
+    const result = await searchHistoryEntries({
+      query,
+      limit: getNumberArg(args, 'limit'),
+      rootDir: getStringArg(args, 'rootDir'),
+      outputDir: getStringArg(args, 'outputDir'),
+      signal,
+    })
+    return jsonResult(result)
+  } catch (error) {
+    return errorResult(errorMessage(error))
+  }
+}
+
 async function handleSearchModules(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
@@ -662,6 +707,8 @@ export async function startMcpServer(): Promise<void> {
       switch (name) {
         case 'search':
           return await handleSearch(args, extra.signal)
+        case 'search-history':
+          return await handleSearchHistory(args, extra.signal)
         case 'build-index':
           return await handleBuildIndex(args, extra.signal)
         case 'read-artifact':

@@ -25,6 +25,7 @@ when_to_use: "Use this as a blocking first step when a code index already exists
 ## Search Routing
 - Decide the target type first, then pick exactly one search tool.
 - If the target is raw source text inside files, use `code-index` source search.
+- If the target is Codex chat history, session transcripts, or rollout JSONL content, use the MCP `search-history` tool.
 - If the target is symbol metadata, use `search-symbols`.
 - If the target is module metadata, use `search-modules`.
 - If the target is a filename, directory name, or approximate path, use Codex file search.
@@ -33,13 +34,15 @@ when_to_use: "Use this as a blocking first step when a code index already exists
 
 ## Decision Order
 1. Does the user want to find code text, call sites, config values, string literals, or implementation details? Use `code-index` source search.
-2. Does the user want a class, function, method, qualified name, signature, or kind? Use `search-symbols`.
-3. Does the user want module path, language, parse mode, or another index field? Use `search-modules`.
-4. Does the user want a filename or folder name, or only an approximate path guess? Use Codex file search.
-5. If more than one answer seems possible, choose the earliest matching rule above.
+2. Does the user want Codex chat history or conversation transcripts? Use `search-history`.
+3. Does the user want a class, function, method, qualified name, signature, or kind? Use `search-symbols`.
+4. Does the user want module path, language, parse mode, or another index field? Use `search-modules`.
+5. Does the user want a filename or folder name, or only an approximate path guess? Use Codex file search.
+6. If more than one answer seems possible, choose the earliest matching rule above.
 
 ## Fast Heuristics
 - Function name, constant, setting, log string, code fragment, quoted source text, or regex-like query such as `A|B|C` -> `code-index` source search.
+- Chat history, rollout transcript, or conversation text -> `search-history`.
 - Symbol name or qualified symbol -> `search-symbols`.
 - Module path or file-level index metadata -> `search-modules`.
 - File basename or folder name -> Codex file search.

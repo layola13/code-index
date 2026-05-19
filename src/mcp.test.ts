@@ -30,6 +30,83 @@ function parseToolResult<T>(result: {
 }
 
 describe('mcp server', () => {
+  it('registers the history search tool and can search the current Codex session', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'code-index-codex-home-'))
+    const currentSession = '019e3f73-30d8-7b52-b0b4-a0a0ea73bc1e'
+    await mkdir(join(codexHome, 'sessions', '2026', '05', '19'), { recursive: true })
+    await writeFile(
+      join(
+        codexHome,
+        'sessions',
+        '2026',
+        '05',
+        '19',
+        `rollout-2026-05-19T16-00-00-${currentSession}.jsonl`,
+      ),
+      [
+        JSON.stringify({
+          type: 'session_meta',
+          payload: { id: currentSession, timestamp: '2026-05-19T08:56:14.312Z' },
+        }),
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'user_message',
+            message: 'target phrase current session',
+          },
+        }),
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const transport = new StdioClientTransport({
+      command: 'bun',
+      args: ['run', 'src/mcp.ts'],
+      cwd: process.cwd(),
+      stderr: 'pipe',
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CODEX_THREAD_ID: currentSession,
+      },
+    })
+    const client = new Client({
+      name: 'code-index-test',
+      version: '0.0.0',
+    })
+
+    try {
+      await client.connect(transport)
+
+      const tools = await client.listTools()
+      expect(tools.tools.map(tool => tool.name)).toContain('search-history')
+
+      const result = await client.callTool({
+        name: 'search-history',
+        arguments: {
+          query: 'target phrase current session',
+          limit: 5,
+        },
+      })
+
+      const parsed = parseToolResult<{
+        count: number
+        items: Array<{ sessionId?: string; hits: Array<{ text: string }> }>
+      }>(result)
+
+      expect(parsed.count).toBe(1)
+      expect(parsed.items[0]?.sessionId).toBe(currentSession)
+      expect(parsed.items[0]?.hits.map(hit => hit.text)).toEqual([
+        'target phrase current session',
+      ])
+    } finally {
+      await client.close()
+      await transport.close()
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
   it('registers the unified search tool and can execute it over source files', async () => {
     const root = await createTempRepo({
       'src/index.ts': [

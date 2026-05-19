@@ -78,6 +78,7 @@ function renderSkillMarkdown(args: {
     `- Browse \`${skeletonPath}/\` when you need method-level detail; skeleton functions include concise stub calls instead of full method bodies.`,
     "- Treat the code index and skeleton as a code map only. After they identify candidate files, read the original source before asserting implementation details, quoting behavior, or editing code.",
     `- Use \`${modulesPath}\` and \`${symbolsPath}\` only when you need exact module or symbol-level detail.`,
+    "- If the user wants Codex chat history, session transcripts, or rollout JSONL content, use the MCP `search-history` tool.",
     "- Use the dedicated edge and skeleton helpers when available: `search-edges` for incoming/outgoing dependency or call lookups, `get-symbol-source` for symbol snippets and line ranges, and `list-skeletons` / `read-skeleton` for method-level browsing.",
     "- In large repositories, you must use this index before broad repo-wide Grep/Glob scans or raw source-file sweeps until the index proves stale or the needed detail is missing.",
     "- If a file is missing from the DOT, no internal file-level dependency edge was resolved for it; jump straight to the skeleton or JSON index.",

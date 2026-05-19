@@ -473,6 +473,7 @@ def top_level(value: str) -> None:
         "`./.code_index/index/architecture.dot`",
       );
       expect(codexSkillText).toContain("`./.code_index/index/summary.md`");
+      expect(codexSkillText).toContain("search-history");
       expect(codexSkillText).toContain(
         "Only fall back to full source-file reads",
       );

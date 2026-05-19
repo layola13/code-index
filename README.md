@@ -132,6 +132,7 @@ any Codex-specific hook wiring.
 启用插件后，Codex 会自动暴露这个插件的 MCP 服务。当前支持的工具有：
 
 - `search`
+- `search-history`
 - `build-index`
 - `read-artifact`
 - `search-modules`
@@ -147,15 +148,18 @@ any Codex-specific hook wiring.
 
 `search` 适合查代码内容、符号上下文、调用点、配置文本和实现细节。只有在你只想做文件名或目录名的模糊匹配时，才使用 Codex 的文件搜索。
 
+`search-history` 用来查 Codex 聊天记录，会扫描 `~/.codex/sessions` 和 `~/.codex/archived_sessions` 下的 rollout JSONL 文件。它会先检查当前会话对应的 `CODEX_THREAD_ID`；如果当前会话里已经命中，工具会立即返回，不再继续扫描更老的会话。查询语义是按 `|` 分隔的字面文本，只匹配可见的用户/助手消息正文，不包含 session 元信息、推理过程、函数调用或工具输出。
+
 `search-edges` 用于查依赖和调用边，支持 `incoming`、`outgoing` 和 `both`。`get-symbol-source` 会直接返回符号对应的源码片段和行号。`list-skeletons` 与 `read-skeleton` 则用于浏览生成的 `skeleton/` 目录，不用手猜路径。
 
 路由规则：
 
 1. 需要查原始源码文本、调用点、配置值、日志字符串、实现细节，或者像 `A|B|C` 这种多条件查询时，使用 `search`。
-2. 需要查符号元数据，比如类名、函数名、方法名、限定名、签名或 kind 时，使用 `search-symbols`。
-3. 需要查模块元数据，比如路径、语言、解析模式或其他索引字段时，使用 `search-modules`。
-4. 只需要文件名、目录名，或者只是一个大概路径猜测时，使用 Codex file search。
-5. 如果一个请求既像内容搜索又像路径搜索，优先选 `search`。
+2. 需要查 Codex 聊天记录、会话正文，或者想优先搜索当前对话时，使用 `search-history`。
+3. 需要查符号元数据，比如类名、函数名、方法名、限定名、签名或 kind 时，使用 `search-symbols`。
+4. 需要查模块元数据，比如路径、语言、解析模式或其他索引字段时，使用 `search-modules`。
+5. 只需要文件名、目录名，或者只是一个大概路径猜测时，使用 Codex file search。
+6. 如果一个请求既像内容搜索又像路径搜索，优先选 `search`。
 
 ## Source strategy indexing
 
