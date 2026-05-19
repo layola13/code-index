@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { mkdir, readFile, rename, writeFile } from 'fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import type { ModuleIR } from './ir.js'
 import type { LoadedSource } from './source.js'
@@ -30,6 +30,39 @@ export type ModuleCacheRecord = {
 
 function cachePath(outputDir: string): string {
   return join(outputDir, MODULE_CACHE_FILENAME)
+}
+
+function isCompleteModuleIR(value: unknown): value is ModuleIR {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const module = value as Partial<ModuleIR>
+  return (
+    typeof module.moduleId === 'string' &&
+    typeof module.sourcePath === 'string' &&
+    typeof module.relativePath === 'string' &&
+    typeof module.language === 'string' &&
+    typeof module.parseMode === 'string' &&
+    Array.isArray(module.imports) &&
+    Array.isArray(module.importStubs) &&
+    Array.isArray(module.exports) &&
+    Array.isArray(module.classes) &&
+    Array.isArray(module.functions) &&
+    Array.isArray(module.notes) &&
+    Array.isArray(module.errors) &&
+    typeof module.sourceBytes === 'number' &&
+    typeof module.lineCount === 'number' &&
+    typeof module.truncated === 'boolean'
+  )
+}
+
+async function invalidateModuleCache(outputDir: string): Promise<void> {
+  try {
+    await rm(outputDir, { recursive: true, force: true })
+  } catch {
+    // A stale cache should not block a rebuild.
+  }
 }
 
 function hashText(text: string): string {
@@ -83,6 +116,7 @@ export async function loadModuleCache(args: {
   try {
     parsed = JSON.parse(raw) as SerializedModuleCache
   } catch {
+    await invalidateModuleCache(args.outputDir)
     return new Map()
   }
 
@@ -92,18 +126,30 @@ export async function loadModuleCache(args: {
     parsed.rootDir !== args.rootDir ||
     parsed.maxFileBytes !== args.maxFileBytes
   ) {
+    await invalidateModuleCache(args.outputDir)
     return new Map()
   }
 
   const records = new Map<string, ModuleCacheRecord>()
-  for (const entry of parsed.entries ?? []) {
-    if (!entry?.relativePath || !entry.module || !entry.fingerprint) {
+  let foundInvalidEntry = false
+  for (const entry of Array.isArray(parsed.entries) ? parsed.entries : []) {
+    if (
+      !entry?.relativePath ||
+      !entry.fingerprint ||
+      !isCompleteModuleIR(entry.module)
+    ) {
+      foundInvalidEntry = true
       continue
     }
     records.set(entry.relativePath, {
       fingerprint: entry.fingerprint,
       module: entry.module,
     })
+  }
+
+  if (foundInvalidEntry) {
+    await invalidateModuleCache(args.outputDir)
+    return new Map()
   }
 
   return records

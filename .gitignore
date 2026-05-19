@@ -6,3 +6,4 @@ node_modules
 .codex/skills/code-index
 .opencode/skills/code-index
 # end code-index generated artifacts
+.mimir/

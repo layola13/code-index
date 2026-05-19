@@ -946,6 +946,75 @@ public:
     }
   });
 
+  it("deletes corrupted module cache and rebuilds from scratch", async () => {
+    const rootDir = await mkdtemp(
+      join(tmpdir(), "claude-code-index-corrupt-cache-"),
+    );
+
+    try {
+      await writeFile(
+        join(rootDir, "alpha.ts"),
+        `export const alpha = 1
+`,
+        "utf8",
+      );
+
+      const outputDir = join(rootDir, ".code_index");
+      await mkdir(join(outputDir, "skeleton"), { recursive: true });
+      await writeFile(join(outputDir, "skeleton", "stale.py"), "STALE\n", "utf8");
+      await writeFile(
+        join(outputDir, "module-cache.v1.json"),
+        JSON.stringify(
+          {
+            version: 2,
+            engine: "typescript",
+            rootDir,
+            maxFileBytes: Number.MAX_SAFE_INTEGER,
+            entries: [
+              {
+                relativePath: "alpha.ts",
+                fingerprint: { signature: "1:stale" },
+                module: {
+                  parseMode: "fallback-rust",
+                  imports: [],
+                  importStubs: [],
+                  exports: [],
+                  classes: [],
+                  functions: [],
+                  notes: [],
+                  errors: [],
+                },
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const result = await buildCodeIndex({
+        rootDir,
+        outputDir,
+        workers: 2,
+      });
+
+      expect(result.incremental.cacheHits).toBe(0);
+      expect(result.incremental.cacheMisses).toBe(1);
+      expect(result.manifest.moduleCount).toBe(1);
+      expect(existsSync(join(outputDir, "skeleton", "stale.py"))).toBe(false);
+
+      const cacheText = await readFile(
+        join(outputDir, "module-cache.v1.json"),
+        "utf8",
+      );
+      expect(cacheText).toContain('"relativePath":"alpha.ts"');
+      expect(cacheText).toContain('"moduleId":"alpha.ts"');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("updates the root gitignore with the generated index directory", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-gitignore-"));
 
