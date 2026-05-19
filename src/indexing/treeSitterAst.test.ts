@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -247,6 +247,90 @@ test('parseAstModule recognizes additional cpp-style extensions', () => {
   expect(cpp?.functions[0]?.name).toBe('top')
 })
 
+test('parseAstModule handles ocaml and ocaml interface files', () => {
+  const ml = parseAstModule({
+    filePath: 'demo/main.ml',
+    moduleId: 'demo/main',
+    sourceText: [
+      'open Foo',
+      'module N = struct',
+      '  let add x y = x + y',
+      '  type t = A | B',
+      '  class c = object',
+      '    method foo x = x',
+      '  end',
+      'end',
+      '',
+    ].join('\n'),
+  })
+
+  expect(ml?.language).toBe('ocaml')
+  expect(ml?.imports).toContain('Foo')
+  expect(ml?.functions.map(fn => fn.name)).toContain('add')
+  expect(ml?.classes.map(cls => cls.name)).toEqual(expect.arrayContaining(['t', 'c']))
+  expect(ml?.classes.find(cls => cls.name === 'c')?.methods[0]?.name).toBe('foo')
+
+  const mli = parseAstModule({
+    filePath: 'demo/main.mli',
+    moduleId: 'demo/main',
+    sourceText: [
+      'val add : int -> int -> int',
+      'module M : sig',
+      '  val x : int',
+      '  class c : object method foo : int -> int end',
+      'end',
+      '',
+    ].join('\n'),
+  })
+
+  expect(mli?.language).toBe('ocaml')
+  expect(mli?.functions.find(fn => fn.name === 'add')?.params.map(param => param.annotation)).toEqual([
+    'int',
+    'int',
+  ])
+  expect(mli?.functions.find(fn => fn.name === 'x')?.returns).toBe('int')
+  expect(mli?.classes.find(cls => cls.name === 'c')?.methods[0]?.name).toBe('foo')
+})
+
+test('parseAstModule handles ocaml module type bodies, class types, and include module type', () => {
+  const moduleType = parseAstModule({
+    filePath: 'src/macro/macroApi.ml',
+    moduleId: 'src/macro/macroApi',
+    sourceText: [
+      'module type InterpApi = sig',
+      '  type value',
+      '',
+      '  val vnull : value',
+      '  val vint : int -> value',
+      '  val encode_string_map : (\'a -> value) -> (string, \'a) PMap.t -> value',
+      '',
+      '  include module type of BaseInterp',
+      '',
+      '  class type printer = object',
+      '    method show : value -> string',
+      '  end',
+      'end',
+      '',
+    ].join('\n'),
+  })
+
+  expect(moduleType?.language).toBe('ocaml')
+  expect(moduleType?.notes).toContain('module type InterpApi')
+  expect(moduleType?.imports).toContain('BaseInterp')
+  expect(moduleType?.importStubs).toContain('include module type of BaseInterp')
+  expect(moduleType?.functions.map(fn => fn.name)).toEqual(
+    expect.arrayContaining(['vnull', 'vint', 'encode_string_map']),
+  )
+  expect(moduleType?.classes.map(cls => cls.name)).toEqual(
+    expect.arrayContaining(['value', 'printer']),
+  )
+  expect(moduleType?.classes.find(cls => cls.name === 'printer')?.methods[0]?.name).toBe('show')
+  expect(moduleType?.functions.find(fn => fn.name === 'vint')?.returns).toBe('value')
+  expect(moduleType?.functions.find(fn => fn.name === 'encode_string_map')?.params[0]?.annotation).toBe(
+    "(\'a -> value) -> (string, \'a) PMap.t",
+  )
+})
+
 test('discoverSourceFiles includes zig extensions', async () => {
   const rootDir = await mkdtemp(join(tmpdir(), 'code-index-zig-discover-'))
 
@@ -257,6 +341,45 @@ test('discoverSourceFiles includes zig extensions', async () => {
     const config = resolveCodeIndexConfig({ rootDir, outputDir: join(rootDir, '.code_index') })
     const discovered = await discoverSourceFiles(config)
     expect(discovered.files.map(file => file.relativePath)).toContain('src/main.zig')
+  } finally {
+    await rm(rootDir, { recursive: true, force: true })
+  }
+})
+
+test('discoverSourceFiles includes ocaml extensions', async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), 'code-index-ocaml-discover-'))
+
+  try {
+    await mkdir(join(rootDir, 'src'), { recursive: true })
+    await writeFile(join(rootDir, 'src', 'main.ml'), 'let add x y = x + y\n', 'utf8')
+    await writeFile(join(rootDir, 'src', 'main.mli'), 'val add : int -> int -> int\n', 'utf8')
+
+    const config = resolveCodeIndexConfig({ rootDir, outputDir: join(rootDir, '.code_index') })
+    const discovered = await discoverSourceFiles(config)
+    expect(discovered.files.map(file => file.relativePath)).toEqual(
+      expect.arrayContaining(['src/main.ml', 'src/main.mli']),
+    )
+  } finally {
+    await rm(rootDir, { recursive: true, force: true })
+  }
+})
+
+test('discoverSourceFiles skips unreadable directories without failing', async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), 'code-index-unreadable-discover-'))
+
+  try {
+    await mkdir(join(rootDir, 'src', 'nested'), { recursive: true })
+    await writeFile(join(rootDir, 'src', 'main.ts'), 'export const ok = true\n', 'utf8')
+    await writeFile(join(rootDir, 'src', 'nested', 'other.ts'), 'export const nested = true\n', 'utf8')
+
+    try {
+      await chmod(join(rootDir, 'src', 'nested'), 0)
+      const config = resolveCodeIndexConfig({ rootDir, outputDir: join(rootDir, '.code_index') })
+      const discovered = await discoverSourceFiles(config)
+      expect(discovered.files.map(file => file.relativePath)).toEqual(['src/main.ts'])
+    } finally {
+      await chmod(join(rootDir, 'src', 'nested'), 0o755)
+    }
   } finally {
     await rm(rootDir, { recursive: true, force: true })
   }

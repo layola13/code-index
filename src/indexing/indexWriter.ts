@@ -44,11 +44,15 @@ export function formatCountSummary(values: Record<string, number>): string {
     .join(' | ')
 }
 
-export async function buildEdges(modules: readonly ModuleIR[]): Promise<EdgeIR[]> {
+export async function buildEdges(args: {
+  modules: readonly ModuleIR[]
+  signal?: AbortSignal
+}): Promise<EdgeIR[]> {
   const edges: EdgeIR[] = []
   const yieldState = createYieldState()
 
-  for (const module of modules) {
+  for (const module of args.modules) {
+    args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
     for (const imported of module.imports) {
       edges.push({
@@ -487,16 +491,21 @@ type FileDependencyEdge = {
 }
 
 async function buildFileDependencyEdges(
-  modules: readonly ModuleIR[],
+  args: {
+    modules: readonly ModuleIR[]
+    signal?: AbortSignal
+  },
 ): Promise<FileDependencyEdge[]> {
-  const aliasMap = buildModuleAliasMap(modules)
+  const aliasMap = buildModuleAliasMap(args.modules)
   const seenEdges = new Set<string>()
   const edges: FileDependencyEdge[] = []
   const yieldState = createYieldState()
 
-  for (const module of modules) {
+  for (const module of args.modules) {
+    args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
     for (const imported of module.imports) {
+      args.signal?.throwIfAborted?.()
       const targetPath = resolveImportToModulePath({
         aliasMap,
         importerPath: module.relativePath,
@@ -559,8 +568,14 @@ function escapeDotLabel(value: string): string {
     .replace(/\r/g, '')
 }
 
-async function renderArchitectureDot(modules: readonly ModuleIR[]): Promise<string> {
-  const edges = await buildFileDependencyEdges(modules)
+async function renderArchitectureDot(args: {
+  modules: readonly ModuleIR[]
+  signal?: AbortSignal
+}): Promise<string> {
+  const edges = await buildFileDependencyEdges({
+    modules: args.modules,
+    signal: args.signal,
+  })
   const nodePaths = [...new Set(edges.flatMap(edge => [edge.sourcePath, edge.targetPath]))]
     .sort((left, right) => left.localeCompare(right))
 
@@ -568,12 +583,14 @@ async function renderArchitectureDot(modules: readonly ModuleIR[]): Promise<stri
   const lines = ['digraph{']
 
   for (const [index, nodePath] of nodePaths.entries()) {
+    args.signal?.throwIfAborted?.()
     const nodeId = `n${index.toString(36)}`
     nodeIds.set(nodePath, nodeId)
     lines.push(`${nodeId}[label="${escapeDotLabel(nodePath)}"]`)
   }
 
   for (const edge of edges) {
+    args.signal?.throwIfAborted?.()
     const sourceId = nodeIds.get(edge.sourcePath)
     const targetId = nodeIds.get(edge.targetPath)
     if (!sourceId || !targetId) {
@@ -593,11 +610,13 @@ export async function writeIndexFiles(args: {
   modules: readonly ModuleIR[]
   outputDir: string
   rootDir: string
+  signal?: AbortSignal
 }): Promise<CodeIndexManifest> {
   const indexDir = join(args.outputDir, 'index')
   await mkdir(indexDir, { recursive: true })
 
   const manifest = buildManifest(args)
+  args.signal?.throwIfAborted?.()
   await writeFile(
     join(indexDir, 'manifest.json'),
     JSON.stringify(manifest, null, 2) + '\n',
@@ -625,6 +644,7 @@ export async function writeIndexFiles(args: {
       errors: module.errors,
     }),
   )
+  args.signal?.throwIfAborted?.()
   await writeFile(join(indexDir, 'modules.jsonl'), moduleLines.join('\n') + '\n', 'utf8')
 
   const symbolLines: string[] = []
@@ -632,6 +652,7 @@ export async function writeIndexFiles(args: {
   const aliasMap = buildModuleAliasMap(args.modules)
   const yieldState = createYieldState()
   for (const module of args.modules) {
+    args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
     for (const cls of module.classes) {
       symbolLines.push(
@@ -672,6 +693,7 @@ export async function writeIndexFiles(args: {
       )
     }
   }
+  args.signal?.throwIfAborted?.()
   await writeFile(join(indexDir, 'symbols.jsonl'), symbolLines.join('\n') + '\n', 'utf8')
 
   const edgeLines = args.edges.map(edge =>
@@ -684,6 +706,7 @@ export async function writeIndexFiles(args: {
       }),
     }),
   )
+  args.signal?.throwIfAborted?.()
   await writeFile(join(indexDir, 'edges.jsonl'), edgeLines.join('\n') + '\n', 'utf8')
 
   await writeFile(
@@ -698,10 +721,14 @@ export async function writeIndexFiles(args: {
   )
   await writeFile(
     join(indexDir, 'architecture.dot'),
-    await renderArchitectureDot(args.modules),
+    await renderArchitectureDot({
+      modules: args.modules,
+      signal: args.signal,
+    }),
     'utf8',
   )
 
+  args.signal?.throwIfAborted?.()
   await writePythonIndex(args)
 
   return manifest
@@ -803,6 +830,7 @@ async function writePythonIndex(args: {
   modules: readonly ModuleIR[]
   outputDir: string
   rootDir: string
+  signal?: AbortSignal
 }): Promise<void> {
   const { modules, edges, outputDir } = args
   const callFreq = computeCallFrequency(edges, modules)
@@ -811,6 +839,7 @@ async function writePythonIndex(args: {
   // Compute compact directory summary
   const dirCounts = new Map<string, number>()
   for (const module of modules) {
+    args.signal?.throwIfAborted?.()
     const parsed = parsePath(module.relativePath)
     const dir = parsed.dir || '.'
     dirCounts.set(dir, (dirCounts.get(dir) ?? 0) + 1)
@@ -859,6 +888,7 @@ async function writePythonIndex(args: {
 
   lines.push('ENTRY_POINTS: Dict[str, str] = {')
   for (const ep of entryPoints) {
+    args.signal?.throwIfAborted?.()
     const escapedPath = escapePythonString(ep.path)
     lines.push(`    '${ep.name}': '${escapedPath}',  # ${ep.description}`)
   }
@@ -872,6 +902,7 @@ async function writePythonIndex(args: {
 
   lines.push('TOP_DIRECTORIES: Dict[str, int] = {')
   for (const [dir, count] of topDirs) {
+    args.signal?.throwIfAborted?.()
     const escapedDir = escapePythonString(dir)
     lines.push(`    '${escapedDir}': ${count},`)
   }
@@ -885,6 +916,7 @@ async function writePythonIndex(args: {
 
   lines.push('HIGH_PRIORITY_SYMBOLS: Dict[str, int] = {')
   for (const [symbol, count] of topCalled) {
+    args.signal?.throwIfAborted?.()
     const escaped = escapePythonString(symbol)
     lines.push(`    '${escaped}': ${count},`)
   }

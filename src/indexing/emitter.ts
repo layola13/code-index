@@ -287,6 +287,7 @@ export async function emitSkeletonTree(args: {
   changedModulePaths?: ReadonlySet<string>;
   onProgress?: CodeIndexProgressCallback;
   previousModulesByPath?: ReadonlyMap<string, ModuleIR>;
+  signal?: AbortSignal;
 }): Promise<void> {
   const { modules, outputDir } = args;
   const skeletonRoot = join(outputDir, "skeleton");
@@ -336,6 +337,7 @@ export async function emitSkeletonTree(args: {
 
   const staleTargets = new Set<string>();
   for (const [relativePath, previousTarget] of previousAssignments.entries()) {
+    args.signal?.throwIfAborted?.()
     const currentTarget = currentAssignments.get(relativePath);
     if (!currentTarget || currentTarget !== previousTarget) {
       staleTargets.add(previousTarget);
@@ -343,11 +345,13 @@ export async function emitSkeletonTree(args: {
   }
 
   for (const staleTarget of staleTargets) {
+    args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState);
     await rm(join(skeletonRoot, staleTarget), { force: true });
   }
 
   for (const module of modules) {
+    args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState);
     const relativeTarget = currentAssignments.get(module.relativePath);
     if (!relativeTarget) {
@@ -367,6 +371,7 @@ export async function emitSkeletonTree(args: {
     }
 
     const targetPath = join(skeletonRoot, relativeTarget);
+    args.signal?.throwIfAborted?.()
     await mkdir(dirname(targetPath), { recursive: true });
     await writeFile(targetPath, renderModuleSkeleton(module), "utf8");
     await markProcessed();
@@ -382,6 +387,7 @@ export async function emitSkeletonTree(args: {
     !(await pathExists(overviewPath));
 
   if (shouldWriteOverview) {
+    args.signal?.throwIfAborted?.()
     await writeFile(overviewPath, overview, "utf8");
   }
 

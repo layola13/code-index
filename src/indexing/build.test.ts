@@ -207,6 +207,43 @@ async function createExternalBundleStrategyPluginPackage(): Promise<{
 }
 
 describe("buildCodeIndex", () => {
+  it("stops quickly when aborted during progress updates", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-abort-"));
+
+    try {
+      await mkdir(join(rootDir, "src"), { recursive: true });
+      for (let index = 0; index < 32; index++) {
+        await writeFile(
+          join(rootDir, "src", `file-${index}.ts`),
+          `export function value${index}() { return ${index} }\n`,
+          "utf8",
+        );
+      }
+
+      const controller = new AbortController();
+      let progressCalls = 0;
+
+      await expect(
+        buildCodeIndex({
+          rootDir,
+          outputDir: join(rootDir, ".code_index"),
+          workers: 2,
+          onProgress: async () => {
+            progressCalls++;
+            if (progressCalls === 1) {
+              controller.abort();
+            }
+          },
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow(/AbortError|aborted/i);
+
+      expect(progressCalls).toBeGreaterThanOrEqual(1);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("emits skeleton, json indexes, dot map, and skills for ts and python inputs", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-"));
 

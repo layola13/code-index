@@ -34,6 +34,8 @@ type ParseLanguage =
   | 'tsx'
   | 'javascript'
   | 'python'
+  | 'ocaml'
+  | 'ocaml_interface'
   | 'go'
   | 'rust'
   | 'java'
@@ -62,6 +64,8 @@ type TreeSitterParseLanguage = Exclude<ParseLanguage, 'generic' | 'saasm'>
 type LanguageLoaders = {
   javascript: () => unknown
   python: () => unknown
+  ocaml: () => unknown
+  ocaml_interface: () => unknown
   go: () => unknown
   rust: () => unknown
   java: () => unknown
@@ -78,6 +82,8 @@ const languageRootPackages: Record<TreeSitterParseLanguage, string> = {
   tsx: 'tree-sitter-typescript',
   javascript: 'tree-sitter-javascript',
   python: 'tree-sitter-python',
+  ocaml: 'tree-sitter-ocaml',
+  ocaml_interface: 'tree-sitter-ocaml',
   go: 'tree-sitter-go',
   rust: 'tree-sitter-rust',
   java: 'tree-sitter-java',
@@ -88,6 +94,8 @@ const languageRootPackages: Record<TreeSitterParseLanguage, string> = {
 }
 
 const parseLanguageByExtension: Array<[RegExp, ParseLanguage]> = [
+  [/\.mli$/i, 'ocaml_interface'],
+  [/\.ml$/i, 'ocaml'],
   [/\.tsx$/i, 'tsx'],
   [/\.mts$/i, 'typescript'],
   [/\.cts$/i, 'typescript'],
@@ -136,6 +144,9 @@ function loadLanguageBinding(language: TreeSitterParseLanguage): unknown {
   if (language === 'typescript' || language === 'tsx') {
     const typed = binding as { tsx?: unknown; typescript?: unknown }
     value = language === 'tsx' ? typed.tsx : typed.typescript
+  } else if (language === 'ocaml' || language === 'ocaml_interface') {
+    const typed = binding as { ocaml?: unknown; ocaml_interface?: unknown }
+    value = language === 'ocaml_interface' ? typed.ocaml_interface : typed.ocaml
   }
 
   if (!value) {
@@ -327,10 +338,16 @@ function buildClassIR(args: {
   sourceText: string
   startNode: SyntaxNode
   endNode: SyntaxNode
+  qualifiedNamePrefix?: string
+  ownerClassName?: string
 }): ClassIR {
   return {
     name: args.name,
-    qualifiedName: `${args.moduleId}::${args.name}`,
+    qualifiedName: args.qualifiedNamePrefix
+      ? `${args.moduleId}::${args.qualifiedNamePrefix}${args.name}`
+      : args.ownerClassName
+      ? `${args.moduleId}::${args.ownerClassName}.${args.name}`
+      : `${args.moduleId}::${args.name}`,
     bases: dedupeStrings(args.bases),
     dependsOn: dedupeStrings(args.dependsOn ?? []),
     methods: args.methods,
@@ -2594,6 +2611,876 @@ function parseZigModuleAst(args: {
   return result
 }
 
+function splitOcamlTopLevelArrows(typeText: string): string[] {
+  const parts: string[] = []
+  let current = ''
+  let parenDepth = 0
+  let bracketDepth = 0
+  let braceDepth = 0
+  let angleDepth = 0
+  let quote: "'" | '"' | null = null
+  let escaping = false
+
+  for (let index = 0; index < typeText.length; index++) {
+    const char = typeText[index] ?? ''
+    const next = typeText[index + 1] ?? ''
+
+    if (quote) {
+      current += char
+      if (escaping) {
+        escaping = false
+        continue
+      }
+      if (char === '\\') {
+        escaping = true
+        continue
+      }
+      if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char
+      current += char
+      continue
+    }
+
+    if (char === '(') {
+      parenDepth++
+      current += char
+      continue
+    }
+    if (char === ')') {
+      parenDepth = Math.max(0, parenDepth - 1)
+      current += char
+      continue
+    }
+    if (char === '[') {
+      bracketDepth++
+      current += char
+      continue
+    }
+    if (char === ']') {
+      bracketDepth = Math.max(0, bracketDepth - 1)
+      current += char
+      continue
+    }
+    if (char === '{') {
+      braceDepth++
+      current += char
+      continue
+    }
+    if (char === '}') {
+      braceDepth = Math.max(0, braceDepth - 1)
+      current += char
+      continue
+    }
+    if (char === '<') {
+      angleDepth++
+      current += char
+      continue
+    }
+    if (char === '>') {
+      if (angleDepth > 0) {
+        angleDepth--
+      }
+      current += char
+      continue
+    }
+
+    if (
+      char === '-' &&
+      next === '>' &&
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      braceDepth === 0 &&
+      angleDepth === 0
+    ) {
+      parts.push(current.trim())
+      current = ''
+      index++
+      continue
+    }
+
+    current += char
+  }
+
+  if (current.trim()) {
+    parts.push(current.trim())
+  }
+
+  return parts
+}
+
+function parseOcamlArrowParameter(
+  part: string,
+  index: number,
+): ParamIR {
+  const normalized = normalizeWhitespace(part)
+  if (!normalized) {
+    return {
+      name: `arg${index + 1}`,
+    }
+  }
+
+  let value = normalized
+  if (value.startsWith('(') && value.endsWith(')')) {
+    value = value.slice(1, -1).trim()
+  }
+
+  if (value.startsWith('~') || value.startsWith('?')) {
+    value = value.slice(1).trim()
+  }
+
+  const colonIndex = value.indexOf(':')
+  if (colonIndex >= 0) {
+    const name = value.slice(0, colonIndex).trim()
+    const annotation = cleanTypeReference(value.slice(colonIndex + 1))
+    return {
+      name: safePythonIdentifier(name || `arg${index + 1}`, `arg${index + 1}`),
+      annotation: annotation || undefined,
+    }
+  }
+
+  return {
+    name: `arg${index + 1}`,
+    annotation: cleanTypeReference(value) || undefined,
+  }
+}
+
+function parseOcamlFunctionSignature(
+  typeText: string,
+): { params: ParamIR[]; returns?: string } {
+  const normalized = normalizeWhitespace(typeText)
+  if (!normalized) {
+    return { params: [] }
+  }
+
+  const parts = splitOcamlTopLevelArrows(normalized)
+  if (parts.length === 0) {
+    return { params: [] }
+  }
+
+  if (parts.length === 1) {
+    return { params: [], returns: cleanTypeReference(parts[0] ?? '') || undefined }
+  }
+
+  const params = parts.slice(0, -1).map((part, index) => parseOcamlArrowParameter(part, index))
+  const returns = cleanTypeReference(parts[parts.length - 1] ?? '') || undefined
+  return { params, returns }
+}
+
+function parseOcamlParameterNode(
+  sourceText: string,
+  node: SyntaxNode,
+  index: number,
+): ParamIR {
+  const rawText = normalizeWhitespace(getNodeText(sourceText, node))
+  if (!rawText) {
+    return {
+      name: `arg${index + 1}`,
+    }
+  }
+
+  if (rawText.startsWith('(') && rawText.endsWith(')') && rawText.includes(':')) {
+    const inner = rawText.slice(1, -1)
+    const colonIndex = inner.indexOf(':')
+    const name = inner.slice(0, colonIndex).trim()
+    const annotation = cleanTypeReference(inner.slice(colonIndex + 1))
+    return {
+      name: safePythonIdentifier(name || `arg${index + 1}`, `arg${index + 1}`),
+      annotation: annotation || undefined,
+    }
+  }
+
+  if (rawText.startsWith('~') || rawText.startsWith('?')) {
+    const inner = rawText.slice(1).trim()
+    const colonIndex = inner.indexOf(':')
+    const name = colonIndex >= 0 ? inner.slice(0, colonIndex).trim() : inner
+    const annotation =
+      colonIndex >= 0 ? cleanTypeReference(inner.slice(colonIndex + 1)) : undefined
+    return {
+      name: safePythonIdentifier(name || `arg${index + 1}`, `arg${index + 1}`),
+      annotation: annotation || undefined,
+    }
+  }
+
+  if (/^[A-Za-z_][A-Za-z0-9_']*$/.test(rawText)) {
+    return {
+      name: safePythonIdentifier(rawText, `arg${index + 1}`),
+    }
+  }
+
+  return {
+    name: `arg${index + 1}`,
+    annotation: cleanTypeReference(rawText) || undefined,
+  }
+}
+
+function ocamlNodeHasDescendantType(
+  node: SyntaxNode | null | undefined,
+  types: readonly string[],
+): boolean {
+  if (!node) {
+    return false
+  }
+  if (types.includes(node.type)) {
+    return true
+  }
+  for (const child of node.namedChildren) {
+    if (ocamlNodeHasDescendantType(child, types)) {
+      return true
+    }
+  }
+  return false
+}
+
+function ocamlNodeTextForTypes(
+  sourceText: string,
+  node: SyntaxNode | null | undefined,
+  types: readonly string[],
+): string {
+  if (!node) {
+    return ''
+  }
+  if (types.includes(node.type)) {
+    return normalizeWhitespace(getNodeText(sourceText, node))
+  }
+  for (const child of node.namedChildren) {
+    const text = ocamlNodeTextForTypes(sourceText, child, types)
+    if (text) {
+      return text
+    }
+  }
+  return ''
+}
+
+function ocamlModuleReferenceText(
+  sourceText: string,
+  node: SyntaxNode | null | undefined,
+): string {
+  return ocamlNodeTextForTypes(sourceText, node, [
+    'extended_module_path',
+    'module_name',
+    'module_path',
+    'module_type_name',
+    'module_type_path',
+  ])
+}
+
+function parseOcamlFunctionLike(
+  sourceText: string,
+  moduleId: string,
+  originPath: string,
+  lineStarts: readonly number[],
+  node: SyntaxNode,
+  args: {
+    bodyNode?: SyntaxNode | null
+    exported: boolean
+    ownerClassName?: string
+    paramsNodeTypes?: readonly string[]
+  },
+): FunctionIR | null {
+  const name = node.childForFieldName('name')?.text?.trim()
+  if (!name) {
+    return null
+  }
+
+  const params: ParamIR[] = []
+  const paramsNodeTypes = args.paramsNodeTypes ?? ['parameter']
+  let parameterIndex = 0
+  for (const child of node.namedChildren) {
+    if (!paramsNodeTypes.includes(child.type)) {
+      continue
+    }
+    params.push(parseOcamlParameterNode(sourceText, child, parameterIndex))
+    parameterIndex++
+  }
+
+  const bodyNode = args.bodyNode ?? node.childForFieldName('body') ?? node.namedChildren.at(-1) ?? null
+  const bodyText = bodyNode ? getNodeText(sourceText, bodyNode) : ''
+  const isAsync = /\basync\b/.test(getNodeText(sourceText, node))
+
+  return {
+    kind: args.ownerClassName ? 'method' : 'function',
+    name,
+    qualifiedName: args.ownerClassName
+      ? `${moduleId}::${args.ownerClassName}.${name}`
+      : `${moduleId}::${name}`,
+    params,
+    returns: undefined,
+    decorators: [],
+    calls: extractCallTargets(bodyText),
+    awaits: extractAwaitTargets(bodyText),
+    raises: extractRaisedTargets(bodyText),
+    isAsync,
+    isPublic: !name.startsWith('_'),
+    exported: args.exported,
+    sourceLines: lineRangeFromOffsets(
+      lineStarts,
+      node.startIndex,
+      bodyNode?.endIndex ?? node.endIndex,
+    ),
+    originPath,
+  }
+}
+
+function ocamlQualifiedClassName(
+  moduleId: string,
+  scopePath: readonly string[],
+  name: string,
+): string {
+  const prefix = scopePath.length > 0 ? `${scopePath.join('.')}.` : ''
+  return `${moduleId}::${prefix}${name}`
+}
+
+function ocamlQualifiedFunctionName(
+  moduleId: string,
+  scopePath: readonly string[],
+  name: string,
+): string {
+  const prefix = scopePath.length > 0 ? `${scopePath.join('.')}.` : ''
+  return `${moduleId}::${prefix}${name}`
+}
+
+function parseOcamlClassMethods(args: {
+  bodyNode: SyntaxNode | null | undefined
+  moduleId: string
+  originPath: string
+  scopePath: readonly string[]
+  sourceText: string
+  lineStarts: readonly number[]
+  className: string
+  exported: boolean
+}): { bases: string[]; methods: FunctionIR[] } {
+  const methods: FunctionIR[] = []
+  const bases: string[] = []
+  const body = args.bodyNode
+  if (!body) {
+    return { bases, methods }
+  }
+
+  for (const child of body.namedChildren) {
+    if (child.type === 'method_definition') {
+      const fn = parseOcamlFunctionLike(
+        args.sourceText,
+        args.moduleId,
+        args.originPath,
+        args.lineStarts,
+        child,
+        {
+          bodyNode: child.childForFieldName('body'),
+          exported: args.exported,
+          ownerClassName: args.scopePath.length > 0
+            ? `${args.scopePath.join('.')}.${args.className}`
+            : args.className,
+        },
+      )
+      if (fn) {
+        methods.push(fn)
+      }
+      continue
+    }
+
+    if (child.type === 'method_specification') {
+      const nameNode =
+        child.childForFieldName('name') ??
+        child.namedChildren.find(inner => inner.type === 'method_name')
+      const name = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+      if (!name) {
+        continue
+      }
+      const signatureNode = child.namedChildren.find(inner =>
+        inner.type === 'function_type' ||
+        inner.type === 'type_constructor_path' ||
+        inner.type === 'type_variable' ||
+        inner.type === 'generic_type' ||
+        inner.type === '_type',
+      )
+      const signature = signatureNode ? getNodeText(args.sourceText, signatureNode) : ''
+      const parsed = parseOcamlFunctionSignature(signature)
+      methods.push({
+        kind: 'method',
+        name,
+        qualifiedName: `${ocamlQualifiedClassName(args.moduleId, args.scopePath, args.className)}.${name}`,
+        params: parsed.params,
+        returns: parsed.returns,
+        decorators: [],
+        calls: [],
+        awaits: [],
+        raises: [],
+        isAsync: false,
+        isPublic: !name.startsWith('_'),
+        exported: args.exported,
+        sourceLines: lineRangeFromOffsets(
+          args.lineStarts,
+          child.startIndex,
+          signatureNode?.endIndex ?? child.endIndex,
+        ),
+        originPath: args.originPath,
+      })
+      continue
+    }
+
+    if (child.type === 'inheritance_definition' || child.type === 'inheritance_specification') {
+      const inherited = normalizeWhitespace(getNodeText(args.sourceText, child))
+        .replace(/^inherit\s+/, '')
+        .replace(/^:\s*/, '')
+        .trim()
+      if (inherited) {
+        bases.push(inherited)
+      }
+    }
+  }
+
+  return {
+    bases: dedupeStrings(bases),
+    methods,
+  }
+}
+
+function parseOcamlTypeDefinition(args: {
+  bodyNode: SyntaxNode | null | undefined
+  exported: boolean
+  lineStarts: readonly number[]
+  moduleId: string
+  originPath: string
+  startNode: SyntaxNode
+  scopePath: readonly string[]
+  sourceText: string
+  typeName: string
+}): ClassIR {
+  const bases: string[] = []
+  const dependsOn: string[] = []
+  const body = args.bodyNode
+
+  return buildClassIR({
+    bases,
+    dependsOn,
+    exported: args.exported,
+    lineStarts: args.lineStarts,
+    methods: [],
+    moduleId: args.moduleId,
+    name: args.typeName,
+    originPath: args.originPath,
+    sourceText: args.sourceText,
+    startNode: args.startNode,
+    endNode: body ?? args.bodyNode ?? args.startNode,
+    qualifiedNamePrefix: args.scopePath.length > 0 ? `${args.scopePath.join('.')}.` : '',
+  })
+}
+
+function parseOcamlAstModule(args: {
+  filePath: string
+  moduleId: string
+  relativePath: string
+  sourceText: string
+  language: 'ocaml' | 'ocaml_interface'
+}): AstModuleResult {
+  const key = `${args.language}:${args.filePath}:${args.sourceText.length}:${args.sourceText.slice(0, 32)}`
+  const cached = structureCache.get(key)
+  if (cached) {
+    return cached
+  }
+
+  const parser = loadParser(args.language)
+  const tree = parser.parse(args.sourceText)
+  const root = tree.rootNode as SyntaxNode
+  const lineStarts = computeLineStarts(args.sourceText)
+  const classes: ClassIR[] = []
+  const functions: FunctionIR[] = []
+  const imports: string[] = []
+  const stubs: string[] = []
+  const errors: string[] = []
+  const notes: string[] = []
+  const exports: string[] = []
+
+  function visit(node: SyntaxNode, scopePath: readonly string[]): void {
+    switch (node.type) {
+      case 'open_module':
+      case 'include_module': {
+        const modulePathNode = node.childForFieldName('module') ?? node.namedChildren.find(child => child.type === 'module_path')
+        const modulePath = modulePathNode ? normalizeWhitespace(getNodeText(args.sourceText, modulePathNode)) : ''
+        if (modulePath) {
+          imports.push(modulePath)
+          stubs.push(`${node.type === 'include_module' ? 'include' : 'open'} ${modulePath}`)
+        }
+        return
+      }
+      case 'include_module_type': {
+        const moduleReference = ocamlModuleReferenceText(args.sourceText, node)
+        if (moduleReference) {
+          imports.push(moduleReference)
+        }
+        const stub = normalizeWhitespace(getNodeText(args.sourceText, node))
+        if (stub) {
+          stubs.push(stub)
+        }
+        return
+      }
+      case 'value_definition': {
+        for (const child of node.namedChildren) {
+          if (child.type !== 'let_binding') {
+            continue
+          }
+          const nameNode =
+            child.childForFieldName('pattern')?.descendantsOfType('value_name')[0] ??
+            child.namedChildren.find(inner =>
+              inner.type === 'value_name' || inner.type === 'parenthesized_operator',
+            )
+          const name = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+          if (!name) {
+            continue
+          }
+          const params: ParamIR[] = []
+          const bodyNode = child.childForFieldName('body') ?? child.namedChildren.at(-1) ?? null
+          let bodyExpression = bodyNode
+          let childIndex = 0
+          for (const bindingChild of child.namedChildren) {
+            if (bindingChild === nameNode) {
+              continue
+            }
+            if (bindingChild.type !== 'parameter') {
+              continue
+            }
+            params.push(parseOcamlParameterNode(args.sourceText, bindingChild, childIndex))
+            childIndex++
+          }
+
+          if (bodyExpression?.type === 'fun_expression') {
+            const nestedParams: ParamIR[] = []
+            let nestedIndex = 0
+            for (const lambdaChild of bodyExpression.namedChildren) {
+              if (lambdaChild.type !== 'parameter') {
+                continue
+              }
+              nestedParams.push(parseOcamlParameterNode(args.sourceText, lambdaChild, nestedIndex))
+              nestedIndex++
+            }
+            params.push(...nestedParams)
+            bodyExpression = bodyExpression.childForFieldName('body') ?? bodyExpression.namedChildren.at(-1) ?? bodyExpression
+          }
+
+          const isCallable =
+            params.length > 0 ||
+            ocamlNodeHasDescendantType(bodyExpression, [
+              'fun_expression',
+              'function_expression',
+            ])
+          if (!isCallable) {
+            continue
+          }
+
+          const fn = {
+            kind: 'function' as const,
+            name,
+            qualifiedName: ocamlQualifiedFunctionName(args.moduleId, scopePath, name),
+            params,
+            returns: undefined,
+            decorators: [],
+            calls: extractCallTargets(bodyExpression ? getNodeText(args.sourceText, bodyExpression) : ''),
+            awaits: extractAwaitTargets(bodyExpression ? getNodeText(args.sourceText, bodyExpression) : ''),
+            raises: extractRaisedTargets(bodyExpression ? getNodeText(args.sourceText, bodyExpression) : ''),
+            isAsync: /\basync\b/.test(getNodeText(args.sourceText, child)),
+            isPublic: !name.startsWith('_'),
+            exported: true,
+            sourceLines: lineRangeFromOffsets(
+              lineStarts,
+              child.startIndex,
+              bodyExpression?.endIndex ?? child.endIndex,
+            ),
+            originPath: args.relativePath,
+          } satisfies FunctionIR
+          functions.push(fn)
+        }
+        return
+      }
+      case 'class_type_definition': {
+        const classTypeBinding = node.namedChildren.find(child => child.type === 'class_type_binding')
+        if (!classTypeBinding) {
+          return
+        }
+        const nameNode =
+          classTypeBinding.childForFieldName('name') ??
+          classTypeBinding.namedChildren.find(child => child.type === 'class_type_name')
+        const className = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+        if (!className) {
+          return
+        }
+        const bodyNode = classTypeBinding.childForFieldName('body') ?? classTypeBinding.namedChildren.find(child =>
+          child.type === 'class_body_type' ||
+          child.type === '_simple_class_type' ||
+          child.type === 'object_expression',
+        )
+        const parsedClass = parseOcamlClassMethods({
+          bodyNode,
+          className,
+          exported: true,
+          lineStarts,
+          moduleId: args.moduleId,
+          originPath: args.relativePath,
+          scopePath,
+          sourceText: args.sourceText,
+        })
+        classes.push(
+          buildClassIR({
+            bases: parsedClass.bases,
+            dependsOn: [],
+            exported: true,
+            lineStarts,
+            methods: parsedClass.methods,
+            moduleId: args.moduleId,
+            name: className,
+            originPath: args.relativePath,
+            sourceText: args.sourceText,
+            startNode: classTypeBinding,
+            endNode: bodyNode ?? classTypeBinding,
+            qualifiedNamePrefix: scopePath.length > 0 ? `${scopePath.join('.')}.` : '',
+          }),
+        )
+        return
+      }
+      case 'value_specification': {
+        const nameNode = node.childForFieldName('name') ?? node.namedChildren.find(child => child.type === 'value_name' || child.type === 'parenthesized_operator')
+        const name = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+        if (!name) {
+          return
+        }
+        const typeNode = node.namedChildren.find(child =>
+          child.type === 'function_type' ||
+          child.type === 'type_constructor_path' ||
+          child.type === 'type_variable' ||
+          child.type === 'tuple_type' ||
+          child.type === 'constrained_type' ||
+          child.type === 'polymorphic_variant_type',
+        ) ?? node.namedChildren.at(-1) ?? null
+        const signatureText = typeNode ? getNodeText(args.sourceText, typeNode) : ''
+        const parsed = parseOcamlFunctionSignature(signatureText)
+        functions.push({
+          kind: 'function',
+          name,
+          qualifiedName: ocamlQualifiedFunctionName(args.moduleId, scopePath, name),
+          params: parsed.params,
+          returns: parsed.returns,
+          decorators: [],
+          calls: [],
+          awaits: [],
+          raises: [],
+          isAsync: false,
+          isPublic: !name.startsWith('_'),
+          exported: true,
+          sourceLines: lineRangeFromOffsets(lineStarts, node.startIndex, node.endIndex),
+          originPath: args.relativePath,
+        })
+        return
+      }
+      case 'class_definition': {
+        const classBinding = node.namedChildren.find(child => child.type === 'class_binding')
+        if (!classBinding) {
+          return
+        }
+        const nameNode = classBinding.childForFieldName('name') ?? classBinding.namedChildren.find(child => child.type === 'class_name')
+        const className = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+        if (!className) {
+          return
+        }
+        const bodyNode = classBinding.childForFieldName('body') ?? classBinding.namedChildren.find(child =>
+          child.type === 'object_expression' || child.type === 'class_body_type',
+        )
+        const parsedClass = parseOcamlClassMethods({
+          bodyNode,
+          className,
+          exported: true,
+          lineStarts,
+          moduleId: args.moduleId,
+          originPath: args.relativePath,
+          scopePath,
+          sourceText: args.sourceText,
+        })
+        classes.push(
+          buildClassIR({
+            bases: parsedClass.bases,
+            dependsOn: [],
+            exported: true,
+            lineStarts,
+            methods: parsedClass.methods,
+            moduleId: args.moduleId,
+            name: className,
+            originPath: args.relativePath,
+            sourceText: args.sourceText,
+            startNode: classBinding,
+            endNode: bodyNode ?? classBinding,
+            qualifiedNamePrefix: scopePath.length > 0 ? `${scopePath.join('.')}.` : '',
+          }),
+        )
+        return
+      }
+      case 'type_definition': {
+        for (const typeBinding of node.namedChildren) {
+          if (typeBinding.type !== 'type_binding') {
+            continue
+          }
+          const nameNode = typeBinding.childForFieldName('name') ?? typeBinding.namedChildren.find(child =>
+            child.type === 'type_constructor' || child.type === 'type_constructor_path',
+          )
+          const typeName = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+          if (!typeName) {
+            continue
+          }
+          const bodyNode = typeBinding.childForFieldName('body') ?? typeBinding.namedChildren.find(child =>
+            child.type === 'record_declaration' || child.type === 'variant_declaration',
+          )
+          classes.push(
+            parseOcamlTypeDefinition({
+              bodyNode,
+              exported: true,
+              lineStarts,
+              moduleId: args.moduleId,
+              originPath: args.relativePath,
+              startNode: typeBinding,
+              scopePath,
+              sourceText: args.sourceText,
+              typeName,
+            }),
+          )
+        }
+        return
+      }
+      case 'exception_definition': {
+        const constructorNode = node.namedChildren.find(child => child.type === 'constructor_declaration')
+        const nameNode = constructorNode?.childForFieldName('name') ?? constructorNode?.namedChildren.find(child => child.type === 'constructor_name')
+        const exceptionName = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+        if (!exceptionName) {
+          return
+        }
+        classes.push(
+          buildClassIR({
+            bases: [],
+            dependsOn: [],
+            exported: true,
+            lineStarts,
+            methods: [],
+            moduleId: args.moduleId,
+            name: exceptionName,
+            originPath: args.relativePath,
+            sourceText: args.sourceText,
+            startNode: constructorNode ?? node,
+            endNode: constructorNode ?? node,
+            qualifiedNamePrefix: scopePath.length > 0 ? `${scopePath.join('.')}.` : '',
+          }),
+        )
+        return
+      }
+      case 'module_definition': {
+        const moduleBinding = node.namedChildren.find(child => child.type === 'module_binding')
+        if (!moduleBinding) {
+          return
+        }
+        const nameNode = moduleBinding.childForFieldName('name') ?? moduleBinding.namedChildren.find(child => child.type === 'module_name')
+        const moduleName = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+        if (!moduleName) {
+          return
+        }
+        const bodyNode = moduleBinding.childForFieldName('body') ?? moduleBinding.namedChildren.find(child =>
+          child.type === 'structure' ||
+          child.type === 'signature' ||
+          child.type === 'module_path',
+        )
+        if (!bodyNode) {
+          return
+        }
+        if (bodyNode.type === 'module_path') {
+          const modulePath = normalizeWhitespace(getNodeText(args.sourceText, bodyNode))
+          if (modulePath) {
+            imports.push(modulePath)
+            stubs.push(`module ${moduleName} = ${modulePath}`)
+          }
+          return
+        }
+
+        visit(bodyNode, [...scopePath, moduleName])
+        return
+      }
+      case 'structure':
+      case 'signature': {
+        for (const child of node.namedChildren) {
+          visit(child, scopePath)
+        }
+        return
+      }
+      case 'module_type_definition': {
+        const nameNode = node.childForFieldName('name') ?? node.namedChildren.find(child => child.type === 'module_type_name')
+        const moduleTypeName = nameNode ? normalizeWhitespace(getNodeText(args.sourceText, nameNode)) : ''
+        if (moduleTypeName) {
+          notes.push(`module type ${scopePath.length > 0 ? `${scopePath.join('.')}.` : ''}${moduleTypeName}`)
+        }
+        const bodyNode =
+          node.childForFieldName('body') ??
+          node.namedChildren.find(child =>
+            child.type === 'signature' ||
+            child.type === 'module_type_of' ||
+            child.type === 'module_type_path' ||
+            child.type === 'parenthesized_module_type',
+          )
+        if (!bodyNode) {
+          return
+        }
+        if (bodyNode.type === 'signature') {
+          visit(bodyNode, [...scopePath, moduleTypeName].filter(Boolean))
+          return
+        }
+        const moduleReference = ocamlModuleReferenceText(args.sourceText, bodyNode)
+        if (moduleReference) {
+          imports.push(moduleReference)
+          stubs.push(`module type ${moduleTypeName} = ${normalizeWhitespace(getNodeText(args.sourceText, bodyNode))}`)
+        }
+        return
+      }
+      default:
+        for (const child of node.namedChildren) {
+          if (
+            child.type === 'structure' ||
+            child.type === 'signature' ||
+            child.type === 'module_definition' ||
+            child.type === 'module_type_definition' ||
+            child.type === 'value_definition' ||
+            child.type === 'value_specification' ||
+            child.type === 'class_definition' ||
+            child.type === 'class_type_definition' ||
+            child.type === 'type_definition' ||
+            child.type === 'exception_definition' ||
+            child.type === 'open_module' ||
+            child.type === 'include_module' ||
+            child.type === 'include_module_type'
+          ) {
+            visit(child, scopePath)
+          }
+        }
+    }
+  }
+
+  visit(root, [])
+
+  const result = {
+    classes: dedupeByQualifiedName(classes),
+    errors: dedupeStrings(errors),
+    exportNames: dedupeStrings([
+      ...exports,
+      ...classes.filter(cls => cls.exported).map(cls => cls.name),
+      ...functions.filter(fn => fn.exported).map(fn => fn.name),
+    ]),
+    importStubs: dedupeStrings(stubs),
+    imports: dedupeStrings(imports),
+    functions: dedupeByQualifiedName(functions),
+    notes: dedupeStrings(notes),
+    language: 'ocaml',
+  }
+  structureCache.set(key, result)
+  return result
+}
+
 function dedupeByQualifiedName<T extends { qualifiedName: string }>(items: readonly T[]): T[] {
   const seen = new Set<string>()
   const result: T[] = []
@@ -2670,6 +3557,22 @@ function parseAstOnlyModule(args: {
     case 'python':
       return parsePythonModuleAst({
         filePath: args.filePath,
+        moduleId: args.moduleId,
+        relativePath: args.relativePath,
+        sourceText: args.sourceText,
+      })
+    case 'ocaml':
+      return parseOcamlAstModule({
+        filePath: args.filePath,
+        language: 'ocaml',
+        moduleId: args.moduleId,
+        relativePath: args.relativePath,
+        sourceText: args.sourceText,
+      })
+    case 'ocaml_interface':
+      return parseOcamlAstModule({
+        filePath: args.filePath,
+        language: 'ocaml_interface',
         moduleId: args.moduleId,
         relativePath: args.relativePath,
         sourceText: args.sourceText,

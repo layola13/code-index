@@ -46,5 +46,6 @@ export type SourceStrategyPlugin = {
     rootDir: string
     tempRootDir: string
     tailText: string
+    signal?: AbortSignal
   }) => Promise<SourceExpansionResult>
 }

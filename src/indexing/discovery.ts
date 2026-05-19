@@ -22,6 +22,18 @@ export type DiscoverSourceFilesResult = {
 
 const DISCOVERY_PROGRESS_INTERVAL = 256
 
+function isIgnorableDirectoryReadError(error: unknown): boolean {
+  return (
+    Boolean(error) &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof (error as { code?: unknown }).code === 'string' &&
+    ['EACCES', 'EPERM', 'ENOENT'].includes(
+      (error as { code?: string }).code ?? '',
+    )
+  )
+}
+
 function shouldSkipDirectory(
   absolutePath: string,
   dirName: string,
@@ -70,11 +82,22 @@ export async function discoverSourceFiles(
   }
 
   async function walk(dirPath: string): Promise<boolean> {
-    const entries = await readdir(dirPath, { withFileTypes: true })
+    config.signal?.throwIfAborted?.()
+    let entries
+    try {
+      entries = await readdir(dirPath, { withFileTypes: true })
+    } catch (error) {
+      if (isIgnorableDirectoryReadError(error)) {
+        return false
+      }
+      throw error
+    }
     entries.sort((a, b) => a.name.localeCompare(b.name))
 
     for (const entry of entries) {
+      config.signal?.throwIfAborted?.()
       await maybeYieldToEventLoop(yieldState)
+      config.signal?.throwIfAborted?.()
       const absolutePath = `${dirPath}${sep}${entry.name}`
 
       if (entry.isDirectory()) {

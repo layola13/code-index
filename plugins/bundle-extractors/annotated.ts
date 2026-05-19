@@ -38,7 +38,7 @@ export function createAnnotatedBundleSourceStrategyPlugin(
         reason: definition.reason,
       }
     },
-    async expand({ file, headText, tempRootDir, tailText }) {
+    async expand({ file, headText, tempRootDir, tailText, signal }) {
       const bundleText = normalizeSampleText({ headText, tailText })
       const split = await splitAnnotatedBundleModules({
         bundleRelativePath: file.relativePath,
@@ -46,6 +46,7 @@ export function createAnnotatedBundleSourceStrategyPlugin(
         kind: definition.kind,
         preserveCandidatePath: definition.kind !== 'webpack',
         tempRootDir,
+        signal,
       })
 
       if (split.units.length > 0 || definition.kind !== 'webpack') {
@@ -56,6 +57,7 @@ export function createAnnotatedBundleSourceStrategyPlugin(
       const baseName = basename(file.relativePath).replace(/\.[^.]+$/, '')
       const relativePath = `chunks/${baseName}-001.js`
       const absolutePath = join(tempRootDir, definition.kind, relativePath)
+      signal?.throwIfAborted?.()
       await writeTempChunk({
         tempRootDir: join(tempRootDir, definition.kind),
         relativePath,

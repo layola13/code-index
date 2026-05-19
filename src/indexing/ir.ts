@@ -3,6 +3,7 @@ export type CodeLanguage =
   | 'tsx'
   | 'javascript'
   | 'python'
+  | 'ocaml'
   | 'go'
   | 'rust'
   | 'java'

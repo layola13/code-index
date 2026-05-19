@@ -18,6 +18,8 @@ export const LANGUAGE_BY_EXTENSION: Record<string, CodeLanguage> = {
   '.mjs': 'javascript',
   '.cjs': 'javascript',
   '.py': 'python',
+  '.ml': 'ocaml',
+  '.mli': 'ocaml',
   '.go': 'go',
   '.rs': 'rust',
   '.java': 'java',
@@ -100,6 +102,7 @@ export type CodeIndexBuildOptions = {
   maxFiles?: number
   rootDir?: string
   outputDir?: string
+  signal?: AbortSignal
   discoverSourceStrategyPluginManifests?: boolean
   sourceStrategyPluginManifests?: readonly string[]
   sourceStrategyKinds?: readonly string[]
@@ -120,6 +123,7 @@ export type CodeIndexConfig = {
   discoverSourceStrategyPluginManifests: boolean
   sourceStrategyPluginManifests: ReadonlySet<string>
   sourceStrategyKinds: ReadonlySet<string>
+  signal?: AbortSignal
 }
 
 function resolveDefaultParseWorkers(): number {
@@ -195,6 +199,7 @@ export function resolveCodeIndexConfig(
         .map(normalizeSourceStrategyKind)
         .filter(kind => Boolean(kind)),
     ),
+    signal: options.signal,
   }
 }
 

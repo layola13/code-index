@@ -21,13 +21,14 @@ export function createViteSourceStrategyPlugin(): SourceStrategyPlugin {
         ? { kind: 'vite', confidence: 0.9, reason: 'vite bundle markers detected' }
         : null
     },
-    async expand({ file, headText, tempRootDir, tailText }) {
+    async expand({ file, headText, tempRootDir, tailText, signal }) {
       const bundleText = normalizeSampleText({ headText, tailText })
       const split = await splitTopLevelJavaScriptModules({
         bundleRelativePath: file.relativePath,
         bundleText,
         kind: 'vite',
         tempRootDir,
+        signal,
       })
 
       if (split.units.length > 0) {

@@ -40,6 +40,7 @@ export type EnsureIndexArtifactsOptions = {
   outputDir: string
   requiredArtifacts: readonly string[]
   rootDir: string
+  signal?: AbortSignal
 }
 
 export async function ensureIndexArtifacts(
@@ -52,6 +53,7 @@ export async function ensureIndexArtifacts(
   await buildCodeIndex({
     rootDir: options.rootDir,
     outputDir: options.outputDir,
+    signal: options.signal,
   })
   return true
 }

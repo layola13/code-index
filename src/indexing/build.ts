@@ -85,6 +85,23 @@ async function reportProgress(
   await callback?.(progress);
 }
 
+function isAbortSignalLike(value: unknown): value is AbortSignal {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    "aborted" in value &&
+    typeof (value as { aborted?: unknown }).aborted === "boolean"
+  )
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return
+  }
+  signal.throwIfAborted?.()
+  throw new Error("Operation cancelled")
+}
+
 function createParseProgressReporter(args: {
   onProgress: CodeIndexProgressCallback | undefined;
   removedFiles: number;
@@ -179,10 +196,13 @@ async function parseExpandedUnitsSequentially(args: {
   modules: ModuleIR[]
   onParsed?: () => void | Promise<void>
   parse: ParseModuleFn
+  signal?: AbortSignal
   yieldState: ReturnType<typeof createYieldState>
 }): Promise<void> {
   for (const entry of args.entries) {
+    throwIfAborted(args.signal)
     await maybeYieldToEventLoop(args.yieldState)
+    throwIfAborted(args.signal)
     args.modules[entry.index] = await args.parse({
       config: args.config,
       file: entry.unit.file,
@@ -272,6 +292,7 @@ async function parseExpandedUnits(args: {
   engine: BuildCodeIndexResult["engine"];
   files: readonly DiscoveredSourceFile[];
   parse: ParseModuleFn;
+  signal?: AbortSignal
 }): Promise<{
   changedModulePaths: Set<string>;
   incremental: CodeIndexIncrementalStats;
@@ -286,6 +307,7 @@ async function parseExpandedUnits(args: {
   const cleanupPaths: string[] = []
 
   try {
+    throwIfAborted(args.signal)
     await reportProgress(args.config.onProgress, {
       phase: 'expand',
       message: `Expanding ${args.files.length} source files`,
@@ -295,7 +317,9 @@ async function parseExpandedUnits(args: {
 
     let expandedFiles = 0
     for (const file of args.files) {
+      throwIfAborted(args.signal)
       await maybeYieldToEventLoop(expandYieldState)
+      throwIfAborted(args.signal)
       const sourceExpansion = await expandSourceFile({
         enabledKinds: args.config.sourceStrategyKinds,
         file,
@@ -303,6 +327,7 @@ async function parseExpandedUnits(args: {
         rootDir: args.config.rootDir,
         discoverPluginManifests: args.config.discoverSourceStrategyPluginManifests,
         pluginManifests: args.config.sourceStrategyPluginManifests,
+        signal: args.signal as AbortSignal | undefined,
       })
       cleanupPaths.push(...sourceExpansion.cleanupPaths)
       if (sourceExpansion.units.length > 0) {
@@ -353,6 +378,7 @@ async function parseExpandedUnits(args: {
 
     const entriesToParse: ExpandedUnit[] = []
     for (const entry of expandedEntries) {
+      throwIfAborted(args.signal)
       const fingerprint = await fingerprintSourceUnit({ unit: entry.unit })
       if (fingerprint) {
         fingerprints.set(entry.unit.file.relativePath, fingerprint)
@@ -394,6 +420,7 @@ async function parseExpandedUnits(args: {
     )
 
     if (entriesToParse.length === 0) {
+      throwIfAborted(args.signal)
       await parseProgress.start()
       await persistModuleCache({
         config: args.config,
@@ -418,6 +445,7 @@ async function parseExpandedUnits(args: {
     )
 
     if (args.config.parseWorkers <= 1 || entriesToParse.length <= 1) {
+      throwIfAborted(args.signal)
       await parseProgress.start()
       await parseExpandedUnitsSequentially({
         config: args.config,
@@ -425,6 +453,7 @@ async function parseExpandedUnits(args: {
         modules,
         onParsed: () => parseProgress.increment(),
         parse: args.parse,
+        signal: args.signal,
         yieldState: createYieldState(),
       })
       await parseProgress.finish()
@@ -449,6 +478,7 @@ async function parseExpandedUnits(args: {
     const workerCount = Math.min(args.config.parseWorkers, entriesToParse.length)
 
     try {
+      throwIfAborted(args.signal)
       await parseProgress.start()
       const workerModules = await parseModulesWithWorkerPool({
         files: entriesToParse.map(entry => entry.unit.file),
@@ -456,6 +486,7 @@ async function parseExpandedUnits(args: {
         onParsed: () => parseProgress.increment(),
         sources: sourcesByRelativePath,
         workerCount,
+        signal: args.signal,
       })
 
       for (const [index, module] of workerModules.entries()) {
@@ -480,6 +511,7 @@ async function parseExpandedUnits(args: {
         cleanupPaths,
       }
     } catch {
+      throwIfAborted(args.signal)
       await parseProgress.reset()
       await parseExpandedUnitsSequentially({
         config: args.config,
@@ -487,6 +519,7 @@ async function parseExpandedUnits(args: {
         modules,
         onParsed: () => parseProgress.increment(),
         parse: args.parse,
+        signal: args.signal,
         yieldState: createYieldState(),
       })
       await parseProgress.finish()
@@ -614,6 +647,7 @@ async function reusePreviousOutputsIfUnchanged(args: {
 export async function buildCodeIndex(
   options: CodeIndexBuildOptions = {},
 ): Promise<BuildCodeIndexResult> {
+  throwIfAborted(isAbortSignalLike(options.signal) ? options.signal : undefined)
   const config = resolveCodeIndexConfig(options);
   await ensureSourceStrategyPluginsLoaded(
     {
@@ -626,6 +660,7 @@ export async function buildCodeIndex(
     discover: discoverSourceFiles,
     engine: "typescript",
     parse: parseModuleWithBuiltin,
+    signal: isAbortSignalLike(options.signal) ? options.signal : undefined,
   });
 }
 
@@ -635,12 +670,14 @@ async function buildCodeIndexWithDiscovery(
     discover: typeof discoverSourceFiles;
     engine: BuildCodeIndexResult["engine"];
     parse: ParseModuleFn;
+    signal?: AbortSignal
   },
 ): Promise<BuildCodeIndexResult> {
   const totalStartedAt = performance.now();
   const config = resolveCodeIndexConfig(options);
   await prepareOutputDirectory(config.outputDir);
 
+  throwIfAborted(args.signal)
   await reportProgress(config.onProgress, {
     phase: "discover",
     message: `Scanning ${config.rootDir} for source files`,
@@ -649,6 +686,7 @@ async function buildCodeIndexWithDiscovery(
   const discovery = await args.discover(config);
   const discoverMs = performance.now() - discoverStartedAt;
   const files = discovery.files;
+  throwIfAborted(args.signal)
   await reportProgress(config.onProgress, {
     phase: "discover",
     message: `Found ${files.length} source files`,
@@ -662,6 +700,7 @@ async function buildCodeIndexWithDiscovery(
     engine: args.engine,
     files,
     parse: args.parse,
+    signal: args.signal,
   });
   const parseMs = performance.now() - parseStartedAt;
   const modules = parsed.modules;
@@ -672,9 +711,11 @@ async function buildCodeIndexWithDiscovery(
     changedModulePaths: parsed.changedModulePaths,
     onProgress: config.onProgress,
     previousModulesByPath: parsed.previousModulesByPath,
+    signal: args.signal,
   });
   const emitSkeletonMs = performance.now() - emitSkeletonStartedAt;
 
+  throwIfAborted(args.signal)
   const reusedOutputs = await reusePreviousOutputsIfUnchanged({
     config,
     fileLimitReached: discovery.fileLimitReached,
@@ -692,6 +733,7 @@ async function buildCodeIndexWithDiscovery(
     if (reusedOutputs) {
       manifest = reusedOutputs.manifest;
     } else {
+      throwIfAborted(args.signal)
       await reportProgress(config.onProgress, {
         phase: "edges",
         message: `Building dependency edges for ${modules.length} modules`,
@@ -699,9 +741,13 @@ async function buildCodeIndexWithDiscovery(
         total: modules.length,
       });
       const buildEdgesStartedAt = performance.now();
-      const edges = await buildEdges(modules);
+      const edges = await buildEdges({
+        modules,
+        signal: args.signal,
+      });
       buildEdgesMs = performance.now() - buildEdgesStartedAt;
 
+      throwIfAborted(args.signal)
       await reportProgress(config.onProgress, {
         phase: "write",
         message: `Writing code index artifacts`,
@@ -716,9 +762,11 @@ async function buildCodeIndexWithDiscovery(
         modules,
         outputDir: config.outputDir,
         rootDir: config.rootDir,
+        signal: args.signal,
       });
       writeIndexFilesMs = performance.now() - writeIndexFilesStartedAt;
     }
+    throwIfAborted(args.signal)
     await reportProgress(config.onProgress, {
       phase: "skills",
       message: `Refreshing code-index skills`,

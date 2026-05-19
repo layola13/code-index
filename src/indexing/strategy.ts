@@ -283,18 +283,22 @@ export async function expandSourceFile(args: {
   pluginManifests?: ReadonlySet<string>
   rootDir: string
   discoverPluginManifests?: boolean
+  signal?: AbortSignal
 }): Promise<SourceExpansionResult> {
+  args.signal?.throwIfAborted?.()
   await ensureSourceStrategyPluginsLoaded({
     manifestPaths: args.pluginManifests ? [...args.pluginManifests] : [],
     rootDir: args.rootDir,
     discoverFromRoot: args.discoverPluginManifests ?? true,
   })
+  args.signal?.throwIfAborted?.()
 
   const sample = await readSourceTextSampleParts(
     args.file.absolutePath,
     DEFAULT_SAMPLE_BYTES,
     DEFAULT_SAMPLE_BYTES,
   )
+  args.signal?.throwIfAborted?.()
   const sampleText = normalizeSampleText(sample)
   const hasMapComment = hasSourceMapComment(sampleText) || hasInlineSourceMap(sampleText)
 
@@ -343,12 +347,14 @@ export async function expandSourceFile(args: {
   }
 
   const tempRootDir = join(args.rootDir, '.code_index_tmp', 'strategy')
+  args.signal?.throwIfAborted?.()
   const expanded = await chosen.plugin.expand({
     file: args.file,
     headText: sample.headText,
     rootDir: args.rootDir,
     tempRootDir,
     tailText: sample.tailText,
+    signal: args.signal,
   })
 
   return {

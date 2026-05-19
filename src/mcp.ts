@@ -1,3 +1,4 @@
+import process from 'node:process'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
@@ -321,10 +322,7 @@ function errorResult(message: string): CallToolResult {
   }
 }
 
-function getStringArg(
-  input: unknown,
-  key: string,
-): string | undefined {
+function getStringArg(input: unknown, key: string): string | undefined {
   if (!input || typeof input !== 'object') {
     return undefined
   }
@@ -332,10 +330,7 @@ function getStringArg(
   return typeof value === 'string' ? value : undefined
 }
 
-function getNumberArg(
-  input: unknown,
-  key: string,
-): number | undefined {
+function getNumberArg(input: unknown, key: string): number | undefined {
   if (!input || typeof input !== 'object') {
     return undefined
   }
@@ -357,7 +352,15 @@ function getStringArrayArg(
   return value.filter((item): item is string => typeof item === 'string')
 }
 
-async function handleBuildIndex(args: unknown): Promise<CallToolResult> {
+function logLifecycle(event: string, details?: string): void {
+  const suffix = details ? ` ${details}` : ''
+  console.error(`[code-index:mcp] ${event}${suffix}`)
+}
+
+async function handleBuildIndex(
+  args: unknown,
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir')
   const outputDir = getStringArg(args, 'outputDir')
   const result = await buildCodeIndex({
@@ -369,6 +372,7 @@ async function handleBuildIndex(args: unknown): Promise<CallToolResult> {
     ignoredDirNames: getStringArrayArg(args, 'ignoredDirNames'),
     sourceStrategyPluginManifests: getStringArrayArg(args, 'sourceStrategyPluginManifests'),
     sourceStrategyKinds: getStringArrayArg(args, 'sourceStrategyKinds'),
+    signal,
   })
 
   return jsonResult({
@@ -377,7 +381,7 @@ async function handleBuildIndex(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleReadArtifact(args: unknown): Promise<CallToolResult> {
+async function handleReadArtifact(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const path = getStringArg(args, 'path')
   if (!path) {
     return errorResult('Missing required argument: path')
@@ -389,6 +393,7 @@ async function handleReadArtifact(args: unknown): Promise<CallToolResult> {
     outputDir,
     requiredArtifacts: ['index/manifest.json'],
     rootDir,
+    signal,
   })
   const content = await readArtifactText(outputDir, path)
 
@@ -399,7 +404,7 @@ async function handleReadArtifact(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleDescribeIndex(args: unknown): Promise<CallToolResult> {
+async function handleDescribeIndex(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
 
@@ -414,6 +419,7 @@ async function handleDescribeIndex(args: unknown): Promise<CallToolResult> {
         'index/edges.jsonl',
       ],
       rootDir,
+      signal,
     })
     const summary = await getIndexArtifactSummary(outputDir)
     const summaryText = await readArtifactText(outputDir, 'index/summary.md')
@@ -426,11 +432,14 @@ async function handleDescribeIndex(args: unknown): Promise<CallToolResult> {
       manifest: JSON.parse(manifestText) as Record<string, unknown>,
     })
   } catch (error) {
+    if (signal?.aborted) {
+      throw error
+    }
     return errorResult(errorMessage(error))
   }
 }
 
-async function handleSearch(args: unknown): Promise<CallToolResult> {
+async function handleSearch(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const query = getStringArg(args, 'query')
   if (!query) {
     return errorResult('Missing required argument: query')
@@ -449,18 +458,20 @@ async function handleSearch(args: unknown): Promise<CallToolResult> {
     pathGlob: getStringArrayArg(args, 'pathGlob'),
     excludeGlob: getStringArrayArg(args, 'excludeGlob'),
     rootDir,
+    signal,
   })
 
   return jsonResult(result)
 }
 
-async function handleSearchModules(args: unknown): Promise<CallToolResult> {
+async function handleSearchModules(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
   await ensureIndexArtifacts({
     outputDir,
     requiredArtifacts: ['index/manifest.json', 'index/modules.jsonl'],
     rootDir,
+    signal,
   })
 
   const matches = await searchModules(outputDir, {
@@ -479,7 +490,7 @@ async function handleSearchModules(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleSearchSymbols(args: unknown): Promise<CallToolResult> {
+async function handleSearchSymbols(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
   await ensureIndexArtifacts({
@@ -490,6 +501,7 @@ async function handleSearchSymbols(args: unknown): Promise<CallToolResult> {
       'index/symbols.jsonl',
     ],
     rootDir,
+    signal,
   })
 
   const matches = await searchSymbols(outputDir, {
@@ -508,7 +520,7 @@ async function handleSearchSymbols(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleSearchEdges(args: unknown): Promise<CallToolResult> {
+async function handleSearchEdges(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
   await ensureIndexArtifacts({
@@ -519,6 +531,7 @@ async function handleSearchEdges(args: unknown): Promise<CallToolResult> {
       'index/edges.jsonl',
     ],
     rootDir,
+    signal,
   })
 
   const result = await searchEdges(outputDir, {
@@ -536,7 +549,7 @@ async function handleSearchEdges(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleGetSymbolSource(args: unknown): Promise<CallToolResult> {
+async function handleGetSymbolSource(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
   const symbolId = getStringArg(args, 'symbolId')
@@ -552,6 +565,7 @@ async function handleGetSymbolSource(args: unknown): Promise<CallToolResult> {
       'index/symbols.jsonl',
     ],
     rootDir,
+    signal,
   })
 
   const result = await getSymbolSource(outputDir, {
@@ -568,13 +582,14 @@ async function handleGetSymbolSource(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleListSkeletons(args: unknown): Promise<CallToolResult> {
+async function handleListSkeletons(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const rootDir = getStringArg(args, 'rootDir') ?? process.cwd()
   const outputDir = resolveIndexOutputDir(rootDir, getStringArg(args, 'outputDir'))
   await ensureIndexArtifacts({
     outputDir,
     requiredArtifacts: ['index/manifest.json', 'skeleton/__root__.py'],
     rootDir,
+    signal,
   })
 
   const items = await listSkeletons(outputDir)
@@ -585,7 +600,7 @@ async function handleListSkeletons(args: unknown): Promise<CallToolResult> {
   })
 }
 
-async function handleReadSkeleton(args: unknown): Promise<CallToolResult> {
+async function handleReadSkeleton(args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const path = getStringArg(args, 'path')
   if (!path) {
     return errorResult('Missing required argument: path')
@@ -597,6 +612,7 @@ async function handleReadSkeleton(args: unknown): Promise<CallToolResult> {
     outputDir,
     requiredArtifacts: ['index/manifest.json', 'skeleton/__root__.py'],
     rootDir,
+    signal,
   })
 
   const item = await readSkeleton(outputDir, { path })
@@ -607,6 +623,8 @@ async function handleReadSkeleton(args: unknown): Promise<CallToolResult> {
 }
 
 export async function startMcpServer(): Promise<void> {
+  logLifecycle('starting')
+  let shuttingDown = false
   const server = new Server(
     {
       name: 'code-index',
@@ -619,6 +637,13 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
+  server.onerror = error => {
+    logLifecycle('server-error', error instanceof Error ? error.message : String(error))
+  }
+  server.onclose = () => {
+    logLifecycle('server-close')
+  }
+
   server.setRequestHandler(ListToolsRequestSchema, async (): Promise<ListToolsResult> => {
     return {
       tools: TOOLS.map(tool => ({
@@ -629,41 +654,96 @@ export async function startMcpServer(): Promise<void> {
     }
   })
 
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }): Promise<CallToolResult> => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra): Promise<CallToolResult> => {
     const { name, arguments: args } = params
+    logLifecycle('tool-start', `${name} request=${String(extra.requestId)}`)
 
     try {
       switch (name) {
         case 'search':
-          return await handleSearch(args)
+          return await handleSearch(args, extra.signal)
         case 'build-index':
-          return await handleBuildIndex(args)
+          return await handleBuildIndex(args, extra.signal)
         case 'read-artifact':
-          return await handleReadArtifact(args)
+          return await handleReadArtifact(args, extra.signal)
         case 'search-modules':
-          return await handleSearchModules(args)
+          return await handleSearchModules(args, extra.signal)
         case 'search-symbols':
-          return await handleSearchSymbols(args)
+          return await handleSearchSymbols(args, extra.signal)
         case 'search-edges':
-          return await handleSearchEdges(args)
+          return await handleSearchEdges(args, extra.signal)
         case 'get-symbol-source':
-          return await handleGetSymbolSource(args)
+          return await handleGetSymbolSource(args, extra.signal)
         case 'list-skeletons':
-          return await handleListSkeletons(args)
+          return await handleListSkeletons(args, extra.signal)
         case 'read-skeleton':
-          return await handleReadSkeleton(args)
+          return await handleReadSkeleton(args, extra.signal)
         case 'describe-index':
-          return await handleDescribeIndex(args)
+          return await handleDescribeIndex(args, extra.signal)
         default:
           return errorResult(`Unknown tool: ${name}`)
       }
     } catch (error) {
-      return errorResult(errorMessage(error))
+      const reason = errorMessage(error)
+      if (extra.signal.aborted) {
+        logLifecycle('tool-cancelled', `${name} ${reason}`)
+      } else {
+        logLifecycle('tool-failed', `${name} ${reason}`)
+      }
+      return errorResult(reason)
+    } finally {
+      logLifecycle('tool-finish', `${name} aborted=${extra.signal.aborted}`)
     }
   })
 
   const transport = new StdioServerTransport()
+  transport.onclose = () => {
+    logLifecycle('stdio-close')
+    void shutdown(0, 'stdio-close')
+  }
+  transport.onerror = error => {
+    logLifecycle('stdio-error', error instanceof Error ? error.message : String(error))
+  }
+
+  async function shutdown(exitCode: number, reason: string): Promise<void> {
+    if (shuttingDown) {
+      return
+    }
+    shuttingDown = true
+    logLifecycle('shutdown', `${reason} exit=${exitCode}`)
+    try {
+      await server.close()
+    } catch (error) {
+      logLifecycle('shutdown-error', error instanceof Error ? error.message : String(error))
+    } finally {
+      process.exit(exitCode)
+    }
+  }
+
+  process.once('exit', code => {
+    logLifecycle('process-exit', `code=${code}`)
+  })
+  process.once('SIGINT', () => {
+    void shutdown(0, 'SIGINT')
+  })
+  process.once('SIGTERM', () => {
+    void shutdown(0, 'SIGTERM')
+  })
+  process.once('uncaughtException', error => {
+    void shutdown(
+      1,
+      `uncaughtException ${error instanceof Error ? error.message : String(error)}`,
+    )
+  })
+  process.once('unhandledRejection', reason => {
+    void shutdown(
+      1,
+      `unhandledRejection ${reason instanceof Error ? reason.message : String(reason)}`,
+    )
+  })
+
   await server.connect(transport)
+  logLifecycle('connected')
 }
 
 if (import.meta.main) {

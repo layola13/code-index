@@ -132,6 +132,7 @@ export async function parseModulesWithWorkerPool(args: {
   sources?: ReadonlyMap<string, LoadedSource | undefined>
   onParsed?: () => void | Promise<void>
   workerCount: number
+  signal?: AbortSignal
 }): Promise<ModuleIR[]> {
   if (args.files.length === 0) {
     return []
@@ -140,6 +141,7 @@ export async function parseModulesWithWorkerPool(args: {
   if (typeof process.versions.bun === 'string') {
     const modules: ModuleIR[] = []
     for (const file of args.files) {
+      args.signal?.throwIfAborted?.()
       const source = args.sources?.get(file.relativePath)
       modules.push(
         await parseModuleWithBuiltinParsers({
@@ -162,6 +164,7 @@ export async function parseModulesWithWorkerPool(args: {
     await Promise.all(
       workers.map(async worker => {
         while (true) {
+          args.signal?.throwIfAborted?.()
           const currentIndex = nextIndex
           nextIndex++
           if (currentIndex >= args.files.length) {

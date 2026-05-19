@@ -263,6 +263,7 @@ export async function splitAnnotatedBundleModules(args: {
   kind: string
   preserveCandidatePath?: boolean
   tempRootDir: string
+  signal?: AbortSignal
 }): Promise<SourceExpansionResult> {
   const text = args.bundleText.replace(/\r\n?/g, '\n')
   const lines = text.split('\n')
@@ -278,6 +279,7 @@ export async function splitAnnotatedBundleModules(args: {
   let currentMarker: { candidatePath: string; lineIndex: number } | null = null
 
   const finalizeChunk = (nextBoundaryLineIndex: number): void => {
+    args.signal?.throwIfAborted?.()
     if (!currentMarker) {
       return
     }
@@ -325,6 +327,7 @@ export async function splitAnnotatedBundleModules(args: {
   }
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    args.signal?.throwIfAborted?.()
     const line = lines[lineIndex] ?? ''
     const candidatePath = extractWebpackModulePath(line) ?? extractModuleMarkerPath(line)
     if (candidatePath) {
@@ -351,6 +354,7 @@ export async function splitAnnotatedBundleModules(args: {
 
   await Promise.all(
     chunks.map(async chunk => {
+      args.signal?.throwIfAborted?.()
       await writeChunkExpansion({
         kind: args.kind,
         tempRootDir: args.tempRootDir,

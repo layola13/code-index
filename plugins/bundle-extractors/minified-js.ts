@@ -72,6 +72,7 @@ export async function splitTopLevelJavaScriptModules(args: {
   bundleText: string
   tempRootDir: string
   kind: string
+  signal?: AbortSignal
 }): Promise<SourceExpansionResult> {
   const text = args.bundleText.replace(/\r\n?/g, '\n')
   let root: SyntaxNode | null = null
@@ -93,6 +94,7 @@ export async function splitTopLevelJavaScriptModules(args: {
   }
 
   const chunks = topLevelNodes.map((node, index) => {
+    args.signal?.throwIfAborted?.()
     const startLine = node.startPosition.row + 1
     const startColumn = node.startPosition.column + 1
     const relativePath = resolveChunkRelativePath({
@@ -112,6 +114,7 @@ export async function splitTopLevelJavaScriptModules(args: {
 
   await Promise.all(
     chunks.map(async chunk => {
+      args.signal?.throwIfAborted?.()
       const { writeTempChunk } = await import('../../src/indexing/extractorUtils.js')
       await writeTempChunk({
         tempRootDir: join(args.tempRootDir, args.kind),
@@ -159,13 +162,14 @@ export function createMinifiedJsSourceStrategyPlugin(): SourceStrategyPlugin {
         ? { kind: 'minified-js', confidence: 0.75, reason: 'minified bundle detected' }
         : null
     },
-    async expand({ file, headText, tempRootDir, tailText }) {
+    async expand({ file, headText, tempRootDir, tailText, signal }) {
       const bundleText = normalizeSampleText({ headText, tailText })
       const split = await splitTopLevelJavaScriptModules({
         bundleRelativePath: file.relativePath,
         bundleText,
         kind: 'minified-js',
         tempRootDir,
+        signal,
       })
 
       if (split.units.length > 0) {
@@ -178,6 +182,7 @@ export function createMinifiedJsSourceStrategyPlugin(): SourceStrategyPlugin {
       })
       const absolutePath = join(tempRootDir, 'minified-js', relativePath)
       const normalizedText = bundleText.replace(/\r\n?/g, '\n')
+      signal?.throwIfAborted?.()
       const { writeTempChunk } = await import('../../src/indexing/extractorUtils.js')
       await writeTempChunk({
         tempRootDir: join(tempRootDir, 'minified-js'),

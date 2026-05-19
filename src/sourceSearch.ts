@@ -58,6 +58,7 @@ export type SourceSearchOptions = {
   query: string
   pathGlob?: string[]
   rootDir?: string
+  signal?: AbortSignal
 }
 
 const DEFAULT_SOURCE_SEARCH_LIMIT = 25
@@ -423,7 +424,9 @@ export async function searchSourceFiles(
   let hitCount = 0
 
   for (const file of discovery.files) {
+    options.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
+    options.signal?.throwIfAborted?.()
 
     if (parsed.scope && !matchesScope(file.relativePath, parsed.scope)) {
       continue
@@ -439,6 +442,7 @@ export async function searchSourceFiles(
     }
 
     const text = await readSourceTextForSearch(file.absolutePath)
+    options.signal?.throwIfAborted?.()
     const lineStarts = computeLineStarts(text)
     const sourceLines = text.split('\n')
     const lineHits = new Map<
@@ -459,6 +463,7 @@ export async function searchSourceFiles(
       const regex = term.regex
       regex.lastIndex = 0
       for (const match of text.matchAll(regex)) {
+        options.signal?.throwIfAborted?.()
         const matchIndex = match.index ?? 0
         const line = offsetToLine(lineStarts, matchIndex)
         const { start, end } = getLineBounds(lineStarts, line, text.length)
