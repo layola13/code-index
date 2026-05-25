@@ -3,8 +3,10 @@ import { existsSync } from "fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { buildCodeIndex } from "./build.js";
+import { buildCodeIndex, buildCodeIndexWithDiscovery } from "./build.js";
+import type { DiscoveredSourceFile } from "./discovery.js";
 import { formatCountSummary } from "./indexWriter.js";
+import type { ModuleIR } from "./ir.js";
 import type { CodeIndexBuildProgress } from "./progress.js";
 import webpack from "webpack";
 import { build as esbuildBuild } from "esbuild";
@@ -730,6 +732,123 @@ public:
       );
       expect(skeletonText).toContain("def tick");
       expect(skeletonText).toContain("def open_file");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips null, undefined, and empty modules without crashing the sort path", async () => {
+    const rootDir = await mkdtemp(
+      join(tmpdir(), "claude-code-index-invalid-modules-"),
+    );
+
+    try {
+      await mkdir(join(rootDir, "src"), { recursive: true });
+      const discoveredFiles: DiscoveredSourceFile[] = [
+        {
+          absolutePath: join(rootDir, "src", "skip-null.ts"),
+          relativePath: "src/skip-null.ts",
+          language: "typescript",
+        },
+        {
+          absolutePath: join(rootDir, "src", "skip-undefined.ts"),
+          relativePath: "src/skip-undefined.ts",
+          language: "typescript",
+        },
+        {
+          absolutePath: join(rootDir, "src", "skip-empty.ts"),
+          relativePath: "src/skip-empty.ts",
+          language: "typescript",
+        },
+        {
+          absolutePath: join(rootDir, "src", "keep.ts"),
+          relativePath: "src/keep.ts",
+          language: "typescript",
+        },
+      ];
+
+      for (const file of discoveredFiles) {
+        await writeFile(file.absolutePath, "export const value = 1\n", "utf8");
+      }
+
+      const validModule: ModuleIR = {
+        moduleId: "src/keep.ts",
+        sourcePath: discoveredFiles[3]!.absolutePath,
+        relativePath: discoveredFiles[3]!.relativePath,
+        language: "typescript",
+        parseMode: "test",
+        imports: [],
+        importStubs: [],
+        exports: [],
+        classes: [],
+        functions: [],
+        notes: [],
+        errors: [],
+        sourceBytes: 1,
+        lineCount: 1,
+        truncated: false,
+      };
+
+      const result = await buildCodeIndexWithDiscovery(
+        {
+          rootDir,
+          outputDir: join(rootDir, ".code_index"),
+          workers: 1,
+        },
+        {
+          discover: async () => ({
+            fileLimitReached: false,
+            files: discoveredFiles,
+          }),
+          engine: "typescript",
+          parse: async ({ file }) => {
+            switch (file.relativePath) {
+              case "src/skip-null.ts":
+                return null;
+              case "src/skip-undefined.ts":
+                return undefined;
+              case "src/skip-empty.ts":
+                return {
+                  moduleId: "",
+                  sourcePath: "",
+                  relativePath: "",
+                  language: "",
+                  parseMode: "",
+                  imports: [],
+                  importStubs: [],
+                  exports: [],
+                  classes: [],
+                  functions: [],
+                  notes: [],
+                  errors: [],
+                  sourceBytes: 0,
+                  lineCount: 0,
+                  truncated: false,
+                } as ModuleIR;
+              default:
+                return validModule;
+            }
+          },
+        },
+      );
+
+      expect(result.manifest.moduleCount).toBe(1);
+      expect(result.manifest.languages.typescript).toBe(1);
+
+      const modulesText = await readFile(
+        join(rootDir, ".code_index", "index", "modules.jsonl"),
+        "utf8",
+      );
+      expect(modulesText).toContain('"path":"src/keep.ts"');
+      expect(modulesText).not.toContain("skip-null");
+      expect(modulesText).not.toContain("skip-undefined");
+      expect(modulesText).not.toContain("skip-empty");
+
+      const skeletonText = await readFile(
+        join(rootDir, ".code_index", "skeleton", "src", "keep.py"),
+        "utf8",
+      );
+      expect(skeletonText).toContain("from __future__ import annotations");
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

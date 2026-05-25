@@ -8,6 +8,7 @@ import {
   fingerprintsEqual,
   fingerprintLoadedSource,
   loadModuleCache,
+  isCompleteModuleIR,
   writeModuleCache,
   type ModuleCacheFingerprint,
 } from "./incremental.js";
@@ -173,7 +174,7 @@ type ParseModuleFn = (args: {
   config: ResolvedCodeIndexConfig;
   file: DiscoveredSourceFile;
   source?: SourceUnit["source"];
-}) => Promise<ModuleIR>;
+}) => Promise<ModuleIR | null | undefined>;
 
 async function parseModuleWithBuiltin(
   args: ParseModuleArgs,
@@ -193,7 +194,7 @@ type ExpandedUnit = {
 async function parseExpandedUnitsSequentially(args: {
   config: ResolvedCodeIndexConfig
   entries: readonly ExpandedUnit[]
-  modules: ModuleIR[]
+  modules: Array<ModuleIR | null | undefined>
   onParsed?: () => void | Promise<void>
   parse: ParseModuleFn
   signal?: AbortSignal
@@ -217,7 +218,7 @@ async function persistModuleCache(args: {
   engine: BuildCodeIndexResult["engine"];
   entries: readonly ExpandedUnit[];
   fingerprints: ReadonlyMap<string, ModuleCacheFingerprint>;
-  modules: readonly ModuleIR[];
+  modules: readonly (ModuleIR | null | undefined)[];
 }): Promise<void> {
   try {
     await writeModuleCache({
@@ -229,7 +230,7 @@ async function persistModuleCache(args: {
       .map((entry) => {
           const fingerprint = args.fingerprints.get(entry.unit.file.relativePath);
           const module = args.modules[entry.index];
-          if (!fingerprint || !module) {
+          if (!fingerprint || !isCompleteModuleIR(module)) {
             return null;
           }
           return {
@@ -357,7 +358,7 @@ async function parseExpandedUnits(args: {
       total: args.files.length,
     })
 
-    const modules = new Array<ModuleIR>(expandedEntries.length)
+    const modules = new Array<ModuleIR | null | undefined>(expandedEntries.length)
     const fingerprints = new Map<string, ModuleCacheFingerprint>()
     const cache = await loadModuleCache({
       engine: args.engine,
@@ -418,6 +419,8 @@ async function parseExpandedUnits(args: {
         record.module,
       ]),
     )
+    const getCompleteModules = (): ModuleIR[] =>
+      modules.filter(isCompleteModuleIR)
 
     if (entriesToParse.length === 0) {
       throwIfAborted(args.signal)
@@ -432,7 +435,7 @@ async function parseExpandedUnits(args: {
       return {
         changedModulePaths,
         incremental,
-        modules,
+        modules: getCompleteModules(),
         parseWorkers: 0,
         previousModulesByPath,
         removedModulePaths,
@@ -467,7 +470,7 @@ async function parseExpandedUnits(args: {
       return {
         changedModulePaths,
         incremental,
-        modules,
+        modules: getCompleteModules(),
         parseWorkers: 1,
         previousModulesByPath,
         removedModulePaths,
@@ -504,7 +507,7 @@ async function parseExpandedUnits(args: {
       return {
         changedModulePaths,
         incremental,
-        modules,
+        modules: getCompleteModules(),
         parseWorkers: workerCount,
         previousModulesByPath,
         removedModulePaths,
@@ -533,7 +536,7 @@ async function parseExpandedUnits(args: {
       return {
         changedModulePaths,
         incremental,
-        modules,
+        modules: getCompleteModules(),
         parseWorkers: 1,
         previousModulesByPath,
         removedModulePaths,
@@ -664,7 +667,7 @@ export async function buildCodeIndex(
   });
 }
 
-async function buildCodeIndexWithDiscovery(
+export async function buildCodeIndexWithDiscovery(
   options: CodeIndexBuildOptions,
   args: {
     discover: typeof discoverSourceFiles;

@@ -1,6 +1,7 @@
 import { mkdir, rm, stat, writeFile } from "fs/promises";
 import { dirname, join, parse } from "path";
 import type { ClassIR, FunctionIR, ModuleIR } from "./ir.js";
+import { isCompleteModuleIR } from "./incremental.js";
 import { pythonizeType, safePythonIdentifier } from "./parserUtils.js";
 import type { CodeIndexProgressCallback } from "./progress.js";
 import { createYieldState, maybeYieldToEventLoop } from "./runtime.js";
@@ -258,7 +259,7 @@ function buildSkeletonAssignmentMap(
 ): Map<string, string> {
   const usedPaths = new Set<string>();
   const assignments = new Map<string, string>();
-  const sortedModules = [...modules].sort((left, right) =>
+  const sortedModules = modules.filter(isCompleteModuleIR).sort((left, right) =>
     left.relativePath.localeCompare(right.relativePath),
   );
 
@@ -289,12 +290,13 @@ export async function emitSkeletonTree(args: {
   previousModulesByPath?: ReadonlyMap<string, ModuleIR>;
   signal?: AbortSignal;
 }): Promise<void> {
-  const { modules, outputDir } = args;
+  const modules = args.modules.filter(isCompleteModuleIR);
+  const { outputDir } = args;
   const skeletonRoot = join(outputDir, "skeleton");
   const yieldState = createYieldState();
   const currentAssignments = buildSkeletonAssignmentMap(modules);
   const previousModules = args.previousModulesByPath
-    ? [...args.previousModulesByPath.values()]
+    ? [...args.previousModulesByPath.values()].filter(isCompleteModuleIR)
     : [];
   const previousAssignments = buildSkeletonAssignmentMap(previousModules);
   const total = modules.length;

@@ -33,7 +33,9 @@ If an AST parser or binding fails at runtime, the build falls back to the heuris
 - `.codex-plugin/plugin.json` - plugin manifest
 - `.mcp.json` - MCP server manifest
 - `hooks/hooks.json` - plugin hook manifest
-- `scripts/run-index-hook.ts` - hook entrypoint
+- `scripts/run-mcp.sh` - MCP launcher
+- `scripts/run-index-hook.sh` - hook launcher
+- `scripts/run-index-hook.ts` - hook implementation
 - `src/` - indexing and MCP implementation
 - `skills/code-index/SKILL.md` - plugin skill for Codex
 
@@ -106,16 +108,21 @@ The plugin ships hooks for all lifecycle events currently supported by Codex:
 - `UserPromptSubmit`
 - `Stop`
 
-Each hook calls the same Bun script:
+Each hook calls the same shell launcher:
 
-`bun run "${PLUGIN_ROOT}/scripts/run-index-hook.ts"`
+`sh "${PLUGIN_ROOT}/scripts/run-index-hook.sh"`
 
-The script:
+The launcher locates Bun from `PATH`, `BUN_BIN`, or common install paths. If Bun is not
+available in the hook process environment, it logs `reason=bun-not-found` and exits `0`
+so Codex tool calls are not marked as hook failures.
+
+The TypeScript hook implementation:
 
 - reads the hook payload from stdin
 - uses the payload `cwd`
 - builds the code index into `cwd/.code_index`
 - stays silent on stdout
+- serializes runs per workspace and skips duplicate triggers during the 1 minute cooldown window
 
 That silence matters because Codex parses hook stdout as structured hook output.
 
@@ -129,7 +136,9 @@ any Codex-specific hook wiring.
 
 ## MCP usage
 
-启用插件后，Codex 会自动暴露这个插件的 MCP 服务。当前支持的工具有：
+启用插件后，Codex 会自动暴露这个插件的 MCP 服务。MCP manifest uses
+`sh scripts/run-mcp.sh`, which locates Bun the same way as the hook launcher so
+new sessions do not depend on a login-shell `PATH`. 当前支持的工具有：
 
 - `search`
 - `search-history`
@@ -215,7 +224,7 @@ bun run src/cli.ts mcp
 You can simulate the hook script directly:
 
 ```bash
-printf '{"cwd":"/some/project"}' | bun run scripts/run-index-hook.ts
+printf '{"cwd":"/some/project"}' | sh scripts/run-index-hook.sh
 ```
 
 The hook returns exit code `0` on success and writes only failures to stderr.

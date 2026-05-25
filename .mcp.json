@@ -2,11 +2,10 @@
   "mcpServers": {
     "code-index": {
       "type": "stdio",
-      "command": "bun",
+      "command": "sh",
       "cwd": ".",
       "args": [
-        "run",
-        "src/mcp.ts"
+        "scripts/run-mcp.sh"
       ]
     }
   }

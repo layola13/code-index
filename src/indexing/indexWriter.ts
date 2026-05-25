@@ -7,6 +7,7 @@ import {
   type FunctionIR,
   type ModuleIR,
 } from './ir.js'
+import { isCompleteModuleIR } from './incremental.js'
 import { safePythonIdentifier } from './parserUtils.js'
 import { createYieldState, maybeYieldToEventLoop } from './runtime.js'
 
@@ -38,6 +39,10 @@ function sortCountRecord(values: Record<string, number>): Record<string, number>
   return Object.fromEntries(sortCountEntries(values))
 }
 
+function collectCompleteModules(modules: readonly ModuleIR[]): ModuleIR[] {
+  return modules.filter(isCompleteModuleIR)
+}
+
 export function formatCountSummary(values: Record<string, number>): string {
   return sortCountEntries(values)
     .map(([name, count]) => `${name}: ${count}`)
@@ -51,7 +56,7 @@ export async function buildEdges(args: {
   const edges: EdgeIR[] = []
   const yieldState = createYieldState()
 
-  for (const module of args.modules) {
+  for (const module of collectCompleteModules(args.modules)) {
     args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
     for (const imported of module.imports) {
@@ -141,7 +146,7 @@ export function buildManifest(args: {
   let methodCount = 0
   let truncatedCount = 0
 
-  for (const module of args.modules) {
+  for (const module of collectCompleteModules(args.modules)) {
     languages[module.language] = (languages[module.language] ?? 0) + 1
     parseModes[module.parseMode] = (parseModes[module.parseMode] ?? 0) + 1
     classCount += module.classes.length
@@ -158,7 +163,7 @@ export function buildManifest(args: {
     rootDir: args.rootDir,
     outputDir: args.outputDir,
     createdAt: new Date().toISOString(),
-    moduleCount: args.modules.length,
+    moduleCount: collectCompleteModules(args.modules).length,
     classCount,
     functionCount,
     methodCount,
@@ -177,7 +182,8 @@ function renderSummary(args: {
   modules: readonly ModuleIR[]
   outputDir: string
 }): string {
-  const largestModules = [...args.modules]
+  const modules = collectCompleteModules(args.modules)
+  const largestModules = [...modules]
     .sort((left, right) => {
       const leftCount =
         left.functions.length +
@@ -227,7 +233,7 @@ function renderSummary(args: {
     }),
   ]
 
-  const failedModules = args.modules.filter(module => module.errors.length > 0)
+  const failedModules = modules.filter(module => module.errors.length > 0)
   if (failedModules.length > 0) {
     lines.push('', '## Parse Errors')
     for (const module of failedModules.slice(0, 20)) {
@@ -309,7 +315,7 @@ function collectModuleAliases(relativePath: string): string[] {
 
 function buildModuleAliasMap(modules: readonly ModuleIR[]): Map<string, string> {
   const aliasMap = new Map<string, string>()
-  const sortedModules = [...modules].sort((left, right) =>
+  const sortedModules = collectCompleteModules(modules).sort((left, right) =>
     left.relativePath.localeCompare(right.relativePath),
   )
 
@@ -324,7 +330,7 @@ function buildModuleAliasMap(modules: readonly ModuleIR[]): Map<string, string> 
 
 function buildModulePathById(modules: readonly ModuleIR[]): Map<string, string> {
   const modulePathById = new Map<string, string>()
-  for (const module of modules) {
+  for (const module of collectCompleteModules(modules)) {
     modulePathById.set(module.moduleId, module.relativePath)
   }
   return modulePathById
@@ -361,7 +367,7 @@ function buildSymbolPathIndex(modules: readonly ModuleIR[]): SymbolPathIndex {
   const exact = new Map<string, string>()
   const localCandidates = new Map<string, string | null>()
 
-  for (const module of modules) {
+  for (const module of collectCompleteModules(modules)) {
     for (const cls of module.classes) {
       addUniquePath(exact, cls.qualifiedName, module.relativePath)
       addUniquePath(localCandidates, localSymbolName(cls.qualifiedName), module.relativePath)
@@ -501,7 +507,7 @@ async function buildFileDependencyEdges(
   const edges: FileDependencyEdge[] = []
   const yieldState = createYieldState()
 
-  for (const module of args.modules) {
+  for (const module of collectCompleteModules(args.modules)) {
     args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
     for (const imported of module.imports) {
@@ -615,7 +621,8 @@ export async function writeIndexFiles(args: {
   const indexDir = join(args.outputDir, 'index')
   await mkdir(indexDir, { recursive: true })
 
-  const manifest = buildManifest(args)
+  const modules = collectCompleteModules(args.modules)
+  const manifest = buildManifest({ ...args, modules })
   args.signal?.throwIfAborted?.()
   await writeFile(
     join(indexDir, 'manifest.json'),
@@ -623,7 +630,7 @@ export async function writeIndexFiles(args: {
     'utf8',
   )
 
-  const moduleLines = args.modules.map(module =>
+  const moduleLines = modules.map(module =>
       JSON.stringify({
         module_id: module.moduleId,
         path: module.relativePath,
@@ -648,10 +655,10 @@ export async function writeIndexFiles(args: {
   await writeFile(join(indexDir, 'modules.jsonl'), moduleLines.join('\n') + '\n', 'utf8')
 
   const symbolLines: string[] = []
-  const symbolPathIndex = buildSymbolPathIndex(args.modules)
-  const aliasMap = buildModuleAliasMap(args.modules)
+  const symbolPathIndex = buildSymbolPathIndex(modules)
+  const aliasMap = buildModuleAliasMap(modules)
   const yieldState = createYieldState()
-  for (const module of args.modules) {
+  for (const module of modules) {
     args.signal?.throwIfAborted?.()
     await maybeYieldToEventLoop(yieldState)
     for (const cls of module.classes) {
@@ -714,7 +721,7 @@ export async function writeIndexFiles(args: {
     renderSummary({
       edges: args.edges,
       manifest,
-      modules: args.modules,
+      modules,
       outputDir: args.outputDir,
     }),
     'utf8',
@@ -722,7 +729,7 @@ export async function writeIndexFiles(args: {
   await writeFile(
     join(indexDir, 'architecture.dot'),
     await renderArchitectureDot({
-      modules: args.modules,
+      modules,
       signal: args.signal,
     }),
     'utf8',

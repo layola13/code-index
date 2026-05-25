@@ -32,18 +32,22 @@ function cachePath(outputDir: string): string {
   return join(outputDir, MODULE_CACHE_FILENAME)
 }
 
-function isCompleteModuleIR(value: unknown): value is ModuleIR {
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+export function isCompleteModuleIR(value: unknown): value is ModuleIR {
   if (!value || typeof value !== 'object') {
     return false
   }
 
   const module = value as Partial<ModuleIR>
   return (
-    typeof module.moduleId === 'string' &&
-    typeof module.sourcePath === 'string' &&
-    typeof module.relativePath === 'string' &&
-    typeof module.language === 'string' &&
-    typeof module.parseMode === 'string' &&
+    isNonEmptyString(module.moduleId) &&
+    isNonEmptyString(module.sourcePath) &&
+    isNonEmptyString(module.relativePath) &&
+    isNonEmptyString(module.language) &&
+    isNonEmptyString(module.parseMode) &&
     Array.isArray(module.imports) &&
     Array.isArray(module.importStubs) &&
     Array.isArray(module.exports) &&
