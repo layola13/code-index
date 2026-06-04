@@ -657,9 +657,9 @@ public:
     try {
       await mkdir(join(rootDir, "src"), { recursive: true });
       await writeFile(
-        join(rootDir, "src", "main.saasm"),
+        join(rootDir, "src", "main.sa"),
         [
-          '@import "sa_std/io/print.saasm-iface"',
+          '@import "sa_std/io/print.sai"',
           '#def MAIN_SIZE = 32',
           '@export tick(e: ptr, n: i32) -> i32:',
           'L_START:',
@@ -676,7 +676,7 @@ public:
         'utf8',
       );
       await writeFile(
-        join(rootDir, "src", "contract.saasm-iface"),
+        join(rootDir, "src", "contract.sai"),
         [
           '@extern sa_hash(data: ptr, len: i32) -> i32',
           '@extern sa_log(msg: ptr) -> i32',
@@ -685,7 +685,7 @@ public:
         'utf8',
       );
       await writeFile(
-        join(rootDir, "src", "layout.saasm-layout"),
+        join(rootDir, "src", "layout.sal"),
         [
           '#def Layout_SIZE = 16',
           '#def Layout_ptr = +0',
@@ -707,18 +707,18 @@ public:
         join(rootDir, ".code_index", "index", "modules.jsonl"),
         "utf8",
       );
-      expect(modulesText).toContain('"path":"src/main.saasm"');
+      expect(modulesText).toContain('"path":"src/main.sa"');
       expect(modulesText).toContain('"lang":"saasm"');
-      expect(modulesText).toContain('"path":"src/contract.saasm-iface"');
-      expect(modulesText).toContain('"path":"src/layout.saasm-layout"');
+      expect(modulesText).toContain('"path":"src/contract.sai"');
+      expect(modulesText).toContain('"path":"src/layout.sal"');
 
       const symbolsText = await readFile(
         join(rootDir, ".code_index", "index", "symbols.jsonl"),
         "utf8",
       );
-      expect(symbolsText).toContain('"qualified_name":"src/main.saasm::tick"');
-      expect(symbolsText).toContain('"qualified_name":"src/main.saasm::open_file"');
-      expect(symbolsText).toContain('"qualified_name":"src/main.saasm::c_open"');
+      expect(symbolsText).toContain('"qualified_name":"src/main.sa::tick"');
+      expect(symbolsText).toContain('"qualified_name":"src/main.sa::open_file"');
+      expect(symbolsText).toContain('"qualified_name":"src/main.sa::c_open"');
 
       const summaryText = await readFile(
         join(rootDir, ".code_index", "index", "summary.md"),

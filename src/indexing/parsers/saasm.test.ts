@@ -5,7 +5,7 @@ import { parseSaasmModule } from './saasm.js'
 
 test('parseSaasmModule extracts SA declarations, metadata, and module skeleton inputs', () => {
   const sourceText = [
-    '@import "sa_std/io/print.saasm-iface"',
+    '@import "sa_std/io/print.sai"',
     '#loc "demo.rs":12:3',
     '#def Buffer_SIZE = 32',
     '@const HELLO_BYTES = utf8:"hello"',
@@ -26,13 +26,13 @@ test('parseSaasmModule extracts SA declarations, metadata, and module skeleton i
   const module = parseSaasmModule({
     config: resolveCodeIndexConfig({ rootDir: '/repo', outputDir: '/repo/.code_index' }),
     file: {
-      absolutePath: '/repo/src/main.saasm',
+      absolutePath: '/repo/src/main.sa',
       language: 'saasm',
-      relativePath: 'src/main.saasm',
+      relativePath: 'src/main.sa',
     },
     source: {
       byteSize: Buffer.byteLength(sourceText, 'utf8'),
-      originPath: '/repo/generated/main.saasm',
+      originPath: '/repo/generated/main.sa',
       originStartCharacter: 7,
       originStartLine: 12,
       text: sourceText,
@@ -42,20 +42,20 @@ test('parseSaasmModule extracts SA declarations, metadata, and module skeleton i
 
   expect(module.language).toBe('saasm')
   expect(module.parseMode).toBe('saasm-line')
-  expect(module.moduleId).toBe('src/main.saasm')
-  expect(module.imports).toEqual(['sa_std/io/print.saasm-iface'])
-  expect(module.importStubs).toContain('# import sa_std/io/print.saasm-iface')
+  expect(module.moduleId).toBe('src/main.sa')
+  expect(module.imports).toEqual(['sa_std/io/print.sai'])
+  expect(module.importStubs).toContain('# import sa_std/io/print.sai')
   expect(module.notes).toContain('Buffer_SIZE')
   expect(module.notes).toContain('HELLO_BYTES')
   expect(module.notes).toContain('L_ENTRY')
-  expect(module.originPath).toBe('/repo/generated/main.saasm')
+  expect(module.originPath).toBe('/repo/generated/main.sa')
   expect(module.originStartLine).toBe(12)
   expect(module.originStartCharacter).toBe(7)
 
   expect(module.functions.map(fn => fn.qualifiedName)).toEqual([
-    'src/main.saasm::main',
-    'src/main.saasm::open_file',
-    'src/main.saasm::c_open',
+    'src/main.sa::main',
+    'src/main.sa::open_file',
+    'src/main.sa::c_open',
   ])
 
   const main = module.functions[0]
