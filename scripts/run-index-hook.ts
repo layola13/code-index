@@ -20,6 +20,9 @@ const HOOK_STATE_DIR = resolve(
 )
 const HOOK_THROTTLE_MS = 60_000
 const HOOK_LOCK_STALE_MS = 10 * 60_000
+const DEFAULT_HOOK_WORKERS = 8
+
+type HookEnv = Record<string, string | undefined>
 
 type RunIndexHookOptions = {
   rawInput: string
@@ -28,6 +31,7 @@ type RunIndexHookOptions = {
   stateDir?: string
   buildCodeIndexImpl?: typeof buildCodeIndex
   statSyncImpl?: typeof statSync
+  env?: HookEnv
   now?: () => Date
 }
 
@@ -55,6 +59,27 @@ function parseInput(text: string): HookInput {
 
 function workspaceKey(cwd: string): string {
   return createHash('sha256').update(cwd).digest('hex').slice(0, 16)
+}
+
+function parsePositiveInteger(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === '') {
+    return null
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null
+  }
+
+  return Math.max(1, Math.trunc(parsed))
+}
+
+function resolveHookWorkers(env: HookEnv = process.env): number {
+  return (
+    parsePositiveInteger(env.CODE_INDEX_HOOK_WORKERS) ??
+    parsePositiveInteger(env.CODE_INDEX_WORKERS) ??
+    DEFAULT_HOOK_WORKERS
+  )
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -153,6 +178,7 @@ export async function runIndexHook(options: RunIndexHookOptions): Promise<number
   const stateDir = options.stateDir ?? HOOK_STATE_DIR
   const buildCodeIndexImpl = options.buildCodeIndexImpl ?? buildCodeIndex
   const statSyncImpl = options.statSyncImpl ?? statSync
+  const workers = resolveHookWorkers(options.env)
   const now = options.now ?? (() => new Date())
   const { cooldownPath, lockPath } = getWorkspacePaths(cwd, stateDir)
 
@@ -161,7 +187,7 @@ export async function runIndexHook(options: RunIndexHookOptions): Promise<number
       input.cwd ?? '',
     )} resolvedCwd=${JSON.stringify(cwd)} session=${JSON.stringify(
       input.session_id ?? '',
-    )} turn=${JSON.stringify(input.turn_id ?? '')} input=${JSON.stringify(options.rawInput.trim())}`,
+    )} turn=${JSON.stringify(input.turn_id ?? '')} workers=${workers} input=${JSON.stringify(options.rawInput.trim())}`,
     logPath,
     now,
   )
@@ -202,6 +228,7 @@ export async function runIndexHook(options: RunIndexHookOptions): Promise<number
     await buildCodeIndexImpl({
       rootDir: cwd,
       outputDir: `${cwd}/.code_index`,
+      workers,
     })
     touchCooldown(cooldownPath, now)
     shouldTouchCooldown = false

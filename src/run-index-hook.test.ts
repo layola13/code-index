@@ -73,6 +73,46 @@ describe("runIndexHook logging", () => {
     }
   });
 
+  test("passes the configured worker count to the index build", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "code-index-run-hook-workers-"));
+    const logPath = join(rootDir, "logs", "hook.log");
+    const stateDir = join(rootDir, "state");
+    const workspaceDir = join(rootDir, "project");
+
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+
+      let buildArgs: { rootDir?: string; outputDir?: string; workers?: number } | undefined;
+      const exitCode = await runIndexHook({
+        rawInput: JSON.stringify({
+          cwd: workspaceDir,
+          hook_event_name: "SessionStart",
+        }),
+        logPath,
+        stateDir,
+        env: {
+          CODE_INDEX_HOOK_WORKERS: "3",
+        },
+        buildCodeIndexImpl: async (args) => {
+          buildArgs = args;
+        },
+        now: () => new Date("2026-05-19T12:00:00.000Z"),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(buildArgs).toEqual({
+        rootDir: workspaceDir,
+        outputDir: `${workspaceDir}/.code_index`,
+        workers: 3,
+      });
+
+      const log = await readFile(logPath, "utf8");
+      expect(log).toContain("workers=3");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   test("skips concurrent work while a build is already running", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "code-index-run-hook-busy-"));
     const logPath = join(rootDir, "logs", "hook.log");

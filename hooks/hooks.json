@@ -1,29 +1,5 @@
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/run-index-hook.sh\" pre-tool-use",
-            "timeout": 120,
-            "statusMessage": "refreshing code index before tool use"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/run-index-hook.sh\" permission-request",
-            "timeout": 120,
-            "statusMessage": "refreshing code index on permission request"
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "hooks": [
@@ -32,30 +8,6 @@
             "command": "sh \"${PLUGIN_ROOT}/scripts/run-index-hook.sh\" post-tool-use",
             "timeout": 120,
             "statusMessage": "refreshing code index after tool use"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/run-index-hook.sh\" pre-compact",
-            "timeout": 120,
-            "statusMessage": "refreshing code index before compaction"
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/run-index-hook.sh\" post-compact",
-            "timeout": 120,
-            "statusMessage": "refreshing code index after compaction"
           }
         ]
       }

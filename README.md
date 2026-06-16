@@ -99,10 +99,9 @@ This Codex-specific wiring is only an adapter around the portable core. If you a
 
 ## Hook behavior
 
-The plugin ships hooks for all lifecycle events currently supported by Codex:
+The plugin ships hooks for the lifecycle events that refresh the index without
+blocking every tool before it runs:
 
-- `PreToolUse`
-- `PermissionRequest`
 - `PostToolUse`
 - `SessionStart`
 - `UserPromptSubmit`
@@ -121,6 +120,8 @@ The TypeScript hook implementation:
 - reads the hook payload from stdin
 - uses the payload `cwd`
 - builds the code index into `cwd/.code_index`
+- uses 8 parse workers by default, overridable with `CODE_INDEX_HOOK_WORKERS`
+  or `CODE_INDEX_WORKERS`
 - stays silent on stdout
 - serializes runs per workspace and skips duplicate triggers during the 1 minute cooldown window
 
