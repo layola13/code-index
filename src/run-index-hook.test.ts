@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
 import { runIndexHook } from "../scripts/run-index-hook.ts";
+
+async function markProjectRoot(workspaceDir: string): Promise<void> {
+  await writeFile(join(workspaceDir, "package.json"), "{}\n", "utf8");
+}
 
 describe("runIndexHook logging", () => {
   test("writes start, skip, and finish records to the configured log file", async () => {
@@ -13,11 +17,12 @@ describe("runIndexHook logging", () => {
 
     try {
       await mkdir(join(rootDir, "project"), { recursive: true });
+      await markProjectRoot(join(rootDir, "project"));
 
       const exitCode = await runIndexHook({
         rawInput: JSON.stringify({
           cwd: join(rootDir, "project"),
-          hook_event_name: "PostToolUse",
+          hook_event_name: "ManualRefresh",
           session_id: "session-1",
           turn_id: "turn-1",
         }),
@@ -33,7 +38,7 @@ describe("runIndexHook logging", () => {
       expect(exitCode).toBe(1);
 
       const log = await readFile(logPath, "utf8");
-      expect(log).toContain("hook-start event=PostToolUse");
+      expect(log).toContain("hook-start event=ManualRefresh");
       expect(log).toContain(`resolvedCwd=${JSON.stringify(join(rootDir, "project"))}`);
       expect(log).toContain('session="session-1"');
       expect(log).toContain('turn="turn-1"');
@@ -53,7 +58,7 @@ describe("runIndexHook logging", () => {
       const exitCode = await runIndexHook({
         rawInput: JSON.stringify({
           cwd: join(rootDir, "missing"),
-          hook_event_name: "SessionStart",
+          hook_event_name: "ManualRefresh",
         }),
         logPath,
         stateDir,
@@ -66,7 +71,7 @@ describe("runIndexHook logging", () => {
       expect(exitCode).toBe(0);
 
       const log = await readFile(logPath, "utf8");
-      expect(log).toContain("hook-start event=SessionStart");
+      expect(log).toContain("hook-start event=ManualRefresh");
       expect(log).toContain("reason=missing");
     } finally {
       await rm(rootDir, { recursive: true, force: true });
@@ -81,12 +86,13 @@ describe("runIndexHook logging", () => {
 
     try {
       await mkdir(workspaceDir, { recursive: true });
+      await markProjectRoot(workspaceDir);
 
       let buildArgs: { rootDir?: string; outputDir?: string; workers?: number } | undefined;
       const exitCode = await runIndexHook({
         rawInput: JSON.stringify({
           cwd: workspaceDir,
-          hook_event_name: "SessionStart",
+          hook_event_name: "ManualRefresh",
         }),
         logPath,
         stateDir,
@@ -113,6 +119,73 @@ describe("runIndexHook logging", () => {
     }
   });
 
+  test("skips lifecycle hook events", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "code-index-run-hook-blocking-"));
+    const logPath = join(rootDir, "logs", "hook.log");
+    const stateDir = join(rootDir, "state");
+    const workspaceDir = join(rootDir, "project");
+
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+
+      let buildCalls = 0;
+      const exitCode = await runIndexHook({
+        rawInput: JSON.stringify({
+          cwd: workspaceDir,
+          hook_event_name: "PostToolUse",
+        }),
+        logPath,
+        stateDir,
+        buildCodeIndexImpl: async () => {
+          buildCalls += 1;
+        },
+        now: () => new Date("2026-05-19T12:00:00.000Z"),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(buildCalls).toBe(0);
+
+      const log = await readFile(logPath, "utf8");
+      expect(log).toContain("hook-start event=PostToolUse");
+      expect(log).toContain("reason=blocking-event");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("skips unmarked workspace directories by default", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "code-index-run-hook-unmarked-"));
+    const logPath = join(rootDir, "logs", "hook.log");
+    const stateDir = join(rootDir, "state");
+    const workspaceDir = join(rootDir, "project");
+
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+
+      let buildCalls = 0;
+      const exitCode = await runIndexHook({
+        rawInput: JSON.stringify({
+          cwd: workspaceDir,
+          hook_event_name: "ManualRefresh",
+        }),
+        logPath,
+        stateDir,
+        buildCodeIndexImpl: async () => {
+          buildCalls += 1;
+        },
+        now: () => new Date("2026-05-19T12:00:00.000Z"),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(buildCalls).toBe(0);
+
+      const log = await readFile(logPath, "utf8");
+      expect(log).toContain("reason=no-project-marker");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   test("skips concurrent work while a build is already running", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "code-index-run-hook-busy-"));
     const logPath = join(rootDir, "logs", "hook.log");
@@ -121,6 +194,7 @@ describe("runIndexHook logging", () => {
 
     try {
       await mkdir(workspaceDir, { recursive: true });
+      await markProjectRoot(workspaceDir);
 
       let buildCalls = 0;
       let buildEntered = false;
@@ -147,7 +221,7 @@ describe("runIndexHook logging", () => {
       const firstRun = runIndexHook({
         rawInput: JSON.stringify({
           cwd: workspaceDir,
-          hook_event_name: "PostToolUse",
+          hook_event_name: "ManualRefresh",
         }),
         logPath,
         stateDir,
@@ -160,7 +234,7 @@ describe("runIndexHook logging", () => {
       const secondRun = runIndexHook({
         rawInput: JSON.stringify({
           cwd: workspaceDir,
-          hook_event_name: "PostToolUse",
+          hook_event_name: "ManualRefresh",
         }),
         logPath,
         stateDir,
@@ -189,6 +263,7 @@ describe("runIndexHook logging", () => {
 
     try {
       await mkdir(workspaceDir, { recursive: true });
+      await markProjectRoot(workspaceDir);
 
       let buildCalls = 0;
       const buildCodeIndexImpl = async () => {
@@ -202,7 +277,7 @@ describe("runIndexHook logging", () => {
         runIndexHook({
           rawInput: JSON.stringify({
             cwd: workspaceDir,
-            hook_event_name: "PostToolUse",
+            hook_event_name: "ManualRefresh",
           }),
           logPath,
           stateDir,
@@ -215,7 +290,7 @@ describe("runIndexHook logging", () => {
         runIndexHook({
           rawInput: JSON.stringify({
             cwd: workspaceDir,
-            hook_event_name: "PostToolUse",
+            hook_event_name: "ManualRefresh",
           }),
           logPath,
           stateDir,
@@ -228,7 +303,7 @@ describe("runIndexHook logging", () => {
         runIndexHook({
           rawInput: JSON.stringify({
             cwd: workspaceDir,
-            hook_event_name: "PostToolUse",
+            hook_event_name: "ManualRefresh",
           }),
           logPath,
           stateDir,

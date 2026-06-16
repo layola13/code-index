@@ -99,15 +99,10 @@ This Codex-specific wiring is only an adapter around the portable core. If you a
 
 ## Hook behavior
 
-The plugin ships hooks for the lifecycle events that refresh the index without
-blocking every tool before it runs:
+The plugin does not register automatic lifecycle hooks by default. The model can
+refresh the index through the CLI or MCP tools when it is useful for the task.
 
-- `PostToolUse`
-- `SessionStart`
-- `UserPromptSubmit`
-- `Stop`
-
-Each hook calls the same shell launcher:
+The hook launcher is still kept as a compatibility shim for older installs:
 
 `sh "${PLUGIN_ROOT}/scripts/run-index-hook.sh"`
 
@@ -122,6 +117,10 @@ The TypeScript hook implementation:
 - builds the code index into `cwd/.code_index`
 - uses 8 parse workers by default, overridable with `CODE_INDEX_HOOK_WORKERS`
   or `CODE_INDEX_WORKERS`
+- skips lifecycle hook events even if
+  an older hook manifest still invokes the script
+- skips directories without common project markers such as `.git`, `package.json`,
+  `Cargo.toml`, or `.code_index`; set `CODE_INDEX_HOOK_ALLOW_UNMARKED=1` to opt in
 - stays silent on stdout
 - serializes runs per workspace and skips duplicate triggers during the 1 minute cooldown window
 

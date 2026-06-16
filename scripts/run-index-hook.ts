@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { buildCodeIndex } from '../src/indexing/build.js'
 import { errorMessage } from '../src/utils/errors.js'
-import { closeSync, openSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'fs'
+import { closeSync, existsSync, openSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'fs'
 import { mkdirSync, appendFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 
@@ -21,6 +21,30 @@ const HOOK_STATE_DIR = resolve(
 const HOOK_THROTTLE_MS = 60_000
 const HOOK_LOCK_STALE_MS = 10 * 60_000
 const DEFAULT_HOOK_WORKERS = 8
+const BLOCKING_EVENT_NAMES = new Set([
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PermissionRequest',
+  'PostToolUse',
+  'PreCompact',
+  'PostCompact',
+  'Stop',
+])
+const PROJECT_MARKER_NAMES = [
+  '.code_index',
+  '.git',
+  'bun.lock',
+  'package.json',
+  'tsconfig.json',
+  'pyproject.toml',
+  'Cargo.toml',
+  'go.mod',
+  'pom.xml',
+  'build.gradle',
+  'settings.gradle',
+  'deno.json',
+]
 
 type HookEnv = Record<string, string | undefined>
 
@@ -80,6 +104,14 @@ function resolveHookWorkers(env: HookEnv = process.env): number {
     parsePositiveInteger(env.CODE_INDEX_WORKERS) ??
     DEFAULT_HOOK_WORKERS
   )
+}
+
+function shouldAllowUnmarkedWorkspace(env: HookEnv = process.env): boolean {
+  return env.CODE_INDEX_HOOK_ALLOW_UNMARKED === '1'
+}
+
+function hasProjectMarker(cwd: string): boolean {
+  return PROJECT_MARKER_NAMES.some(name => existsSync(join(cwd, name)))
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -192,6 +224,11 @@ export async function runIndexHook(options: RunIndexHookOptions): Promise<number
     now,
   )
 
+  if (BLOCKING_EVENT_NAMES.has(eventName)) {
+    logHook(`hook-skip event=${eventName} resolvedCwd=${JSON.stringify(cwd)} reason=blocking-event`, logPath, now)
+    return 0
+  }
+
   try {
     const cwdStat = statSyncImpl(cwd)
     if (!cwdStat.isDirectory()) {
@@ -200,6 +237,11 @@ export async function runIndexHook(options: RunIndexHookOptions): Promise<number
     }
   } catch {
     logHook(`hook-skip event=${eventName} resolvedCwd=${JSON.stringify(cwd)} reason=missing`, logPath, now)
+    return 0
+  }
+
+  if (!shouldAllowUnmarkedWorkspace(options.env) && !hasProjectMarker(cwd)) {
+    logHook(`hook-skip event=${eventName} resolvedCwd=${JSON.stringify(cwd)} reason=no-project-marker`, logPath, now)
     return 0
   }
 
