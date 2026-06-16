@@ -106,6 +106,7 @@ const parseLanguageByExtension: Array<[RegExp, ParseLanguage]> = [
   [/\.js$/i, 'javascript'],
   [/\.py$/i, 'python'],
   [/\.go$/i, 'go'],
+  [/\.sla$/i, 'rust'],
   [/\.rs$/i, 'rust'],
   [/\.java$/i, 'java'],
   [/\.hx$/i, 'haxe'],

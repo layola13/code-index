@@ -22,6 +22,7 @@ export const LANGUAGE_BY_EXTENSION: Record<string, CodeLanguage> = {
   '.mli': 'ocaml',
   '.go': 'go',
   '.rs': 'rust',
+  '.sla': 'rust',
   '.java': 'java',
   '.hx': 'haxe',
   '.zig': 'zig',

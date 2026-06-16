@@ -140,6 +140,32 @@ test('parseAstModule preserves AST structure for cpp, h, go, rust, java, haxe, a
   expect(rust?.classes[0]?.methods[0]?.name).toBe('foo')
   expect(rust?.functions[0]?.name).toBe('top')
 
+  const sla = parseAstModule({
+    filePath: 'demo/main.sla',
+    moduleId: 'demo/main',
+    sourceText: [
+      'use std::fmt;',
+      '',
+      'pub struct S;',
+      '',
+      'impl S {',
+      '  pub fn foo(&self, x: i32) -> i32 {',
+      '    x',
+      '  }',
+      '}',
+      '',
+      'pub fn top(y: i32) -> i32 {',
+      '  y',
+      '}',
+      '',
+    ].join('\n'),
+  })
+
+  expect(sla?.language).toBe('rust')
+  expect(sla?.imports).toContain('use std::fmt;')
+  expect(sla?.classes[0]?.methods[0]?.name).toBe('foo')
+  expect(sla?.functions[0]?.name).toBe('top')
+
   const java = parseAstModule({
     filePath: 'demo/Main.java',
     moduleId: 'demo/Main',
@@ -341,6 +367,22 @@ test('discoverSourceFiles includes zig extensions', async () => {
     const config = resolveCodeIndexConfig({ rootDir, outputDir: join(rootDir, '.code_index') })
     const discovered = await discoverSourceFiles(config)
     expect(discovered.files.map(file => file.relativePath)).toContain('src/main.zig')
+  } finally {
+    await rm(rootDir, { recursive: true, force: true })
+  }
+})
+
+test('discoverSourceFiles includes sla files as rust sources', async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), 'code-index-sla-discover-'))
+
+  try {
+    await mkdir(join(rootDir, 'src'), { recursive: true })
+    await writeFile(join(rootDir, 'src', 'main.sla'), 'pub fn top() -> i32 { 1 }\n', 'utf8')
+
+    const config = resolveCodeIndexConfig({ rootDir, outputDir: join(rootDir, '.code_index') })
+    const discovered = await discoverSourceFiles(config)
+    const slaFile = discovered.files.find(file => file.relativePath === 'src/main.sla')
+    expect(slaFile?.language).toBe('rust')
   } finally {
     await rm(rootDir, { recursive: true, force: true })
   }
