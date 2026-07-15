@@ -458,6 +458,9 @@ def top_level(value: str) -> None:
       );
       expect(claudeSkillText).toContain("If a file is missing from the DOT");
       expect(claudeSkillText).toContain(
+        "Never build or refresh an index with `rootDir` set to `~`, `$HOME`, `~/projects`, or `/home/vscode/projects`",
+      );
+      expect(claudeSkillText).toContain(
         "valid Python with lightweight call stubs",
       );
       expect(claudeSkillText).toContain("code map only");
@@ -480,6 +483,9 @@ def top_level(value: str) -> None:
         "Only fall back to full source-file reads",
       );
       expect(codexSkillText).toContain(
+        "Never build or refresh an index with `rootDir` set to `~`, `$HOME`, `~/projects`, or `/home/vscode/projects`",
+      );
+      expect(codexSkillText).toContain(
         "valid Python with lightweight call stubs",
       );
       expect(codexSkillText).toContain("code map only");
@@ -494,6 +500,9 @@ def top_level(value: str) -> None:
       expect(opencodeSkillText).toContain('name: "code-index"');
       expect(opencodeSkillText).toContain(
         "`./.code_index/index/architecture.dot`",
+      );
+      expect(opencodeSkillText).toContain(
+        "Never build or refresh an index with `rootDir` set to `~`, `$HOME`, `~/projects`, or `/home/vscode/projects`",
       );
       expect(opencodeSkillText).toContain("method-level detail");
     } finally {
@@ -1224,6 +1233,9 @@ public:
       expect(result.timings.writeSkillsMs).toBeGreaterThan(0);
       expect(skillText).not.toBe("STALE\n");
       expect(skillText).toContain('name: "code-index"');
+      expect(skillText).toContain(
+        "Never build or refresh an index with `rootDir` set to `~`, `$HOME`, `~/projects`, or `/home/vscode/projects`",
+      );
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

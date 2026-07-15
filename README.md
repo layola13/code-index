@@ -208,6 +208,18 @@ bun run src/cli.ts build . \
 
 MCP 的 `build-index` 工具也接受同样的 `sourceStrategyKinds` 和 `sourceStrategyPluginManifests` 参数。
 
+## Generated skills
+
+Every successful build refreshes generated `code-index` skills in the target project:
+
+- `.claude/skills/code-index/SKILL.md`
+- `.codex/skills/code-index/SKILL.md`
+- `.opencode/skills/code-index/SKILL.md`
+
+Build and refresh commands must target a concrete project directory. Do not run the indexer with
+`rootDir` set to `~`, `$HOME`, `~/projects`, or `/home/vscode/projects`; use a repository path such
+as `/home/vscode/projects/hubproxy` instead.
+
 ## CLI usage
 
 From the project root:

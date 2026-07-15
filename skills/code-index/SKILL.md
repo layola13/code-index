@@ -8,6 +8,7 @@ when_to_use: "Use this as a blocking first step when a code index already exists
 
 ## Instructions
 - This is a blocking first step whenever `./.code_index/` already exists and you need repository structure, dependency tracing, symbol lookup, or implementation-file discovery.
+- Never build or refresh an index with `rootDir` set to `~`, `$HOME`, `~/projects`, or `/home/vscode/projects`; use the concrete project directory instead.
 - Start with `./.code_index/index/architecture.dot` for the smallest file-level dependency map. Outgoing edges show what a file depends on; incoming edges show likely impact.
 - Then use `./.code_index/__index__.py` for entry points, top directories, and high-priority symbols.
 - Read `./.code_index/index/summary.md` for a human-readable overview.

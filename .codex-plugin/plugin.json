@@ -1,9 +1,11 @@
 {
   "name": "code-index",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260707112116",
   "description": "Standalone Bun+TS code index plugin, MCP server, and lifecycle hooks.",
-  "skills": "./skills/code-index",
-  "hooks": "./hooks/hooks.json",
+  "author": {
+    "name": "Codex"
+  },
+  "skills": "./skills",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Code Index",
@@ -11,7 +13,11 @@
     "longDescription": "A standalone Bun+TS plugin that builds and queries repository code indexes, exposes them through MCP, and refreshes the index on Codex session lifecycle events.",
     "developerName": "Codex",
     "category": "Productivity",
-    "capabilities": ["Read", "Write", "Interactive"],
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
     "websiteURL": "https://github.com/openai/codex",
     "defaultPrompt": [
       "Build or refresh the code index for this workspace.",
