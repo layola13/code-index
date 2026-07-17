@@ -6,7 +6,7 @@ import { startMcpServer } from './mcp.js'
 import { errorMessage } from './utils/errors.js'
 
 const USAGE = [
-  'Usage: code-index [build] [path] [--output DIR] [--max-file-bytes N] [--max-files N] [--workers N] [--ignore-dir NAME] [--source-strategy KIND] [--source-strategy-plugin-manifest PATH]',
+  'Usage: code-index [build] [path] [--engine typescript|rust] [--output DIR] [--max-file-bytes N] [--max-files N] [--workers N] [--ignore-dir NAME] [--source-strategy KIND] [--source-strategy-plugin-manifest PATH]',
   '       code-index mcp',
   '',
   'Examples:',
@@ -16,6 +16,7 @@ const USAGE = [
   '  code-index mcp',
   '  code-index build --max-file-bytes 1048576',
   '  code-index build . --workers 8',
+  '  code-index build /path/to/large/repo --engine rust --workers 8',
   '  code-index build . --max-files 20000 --ignore-dir ThirdParty',
 ].join('\n')
 
@@ -56,9 +57,13 @@ export function formatBuildResult(result: Awaited<ReturnType<typeof buildCodeInd
     `- ${outputDir}/index/summary.md`,
     `- ${outputDir}/index/manifest.json`,
     `- ${outputDir}/skeleton`,
-    `- ${skillPaths.claude}`,
-    `- ${skillPaths.codex}`,
-    `- ${skillPaths.opencode}`,
+    ...(result.skillsWritten === false
+      ? []
+      : [
+          `- ${skillPaths.claude}`,
+          `- ${skillPaths.codex}`,
+          `- ${skillPaths.opencode}`,
+        ]),
   ].join('\n')
 }
 
@@ -76,6 +81,7 @@ async function runBuildCommand(args: string): Promise<number> {
 
   const result = await buildCodeIndex({
     ignoredDirNames: parsed.ignoredDirNames,
+    engine: parsed.engine,
     maxFiles: parsed.maxFiles,
     maxFileBytes: parsed.maxFileBytes,
     outputDir: parsed.outputDir,

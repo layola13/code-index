@@ -937,12 +937,15 @@ function parseTsJsModule(args: {
   // Merge in heuristic enrichment for TypeScript/JavaScript files.
   const heuristic = parseTypeScriptLikeModule({
     config: {
+      engine: 'typescript',
       rootDir: '',
       outputDir: '',
       outputDirName: '',
       maxFileBytes: args.sourceText.length,
       parseWorkers: 1,
       ignoredDirNames: new Set<string>(),
+      discoverSourceStrategyPluginManifests: false,
+      sourceStrategyPluginManifests: new Set<string>(),
       sourceStrategyKinds: new Set<string>(),
     },
     file: {
@@ -3504,12 +3507,15 @@ function parseGenericAstFallback(args: {
   const result = parseGenericModule(
     {
       config: {
+        engine: 'typescript',
         rootDir: '',
         outputDir: '',
         outputDirName: '',
         maxFileBytes: args.sourceText.length,
         parseWorkers: 1,
         ignoredDirNames: new Set<string>(),
+        discoverSourceStrategyPluginManifests: false,
+        sourceStrategyPluginManifests: new Set<string>(),
         sourceStrategyKinds: new Set<string>(),
       },
       file: {
@@ -3740,12 +3746,15 @@ export function parseAstModule(args: {
         astResult,
         parseTypeScriptLikeModule({
           config: {
+            engine: 'typescript',
             rootDir: '',
             outputDir: '',
             outputDirName: '',
             maxFileBytes: args.sourceText.length,
             parseWorkers: 1,
             ignoredDirNames: new Set<string>(),
+            discoverSourceStrategyPluginManifests: false,
+            sourceStrategyPluginManifests: new Set<string>(),
             sourceStrategyKinds: new Set<string>(),
           },
           file: {
@@ -3767,12 +3776,15 @@ export function parseAstModule(args: {
         astResult,
         parsePythonModule({
           config: {
+            engine: 'typescript',
             rootDir: '',
             outputDir: '',
             outputDirName: '',
             maxFileBytes: args.sourceText.length,
             parseWorkers: 1,
             ignoredDirNames: new Set<string>(),
+            discoverSourceStrategyPluginManifests: false,
+            sourceStrategyPluginManifests: new Set<string>(),
             sourceStrategyKinds: new Set<string>(),
           },
           file: {

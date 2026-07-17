@@ -7,6 +7,10 @@ export const DEFAULT_MAX_FILE_BYTES = Number.MAX_SAFE_INTEGER
 
 export const DEFAULT_PARSE_WORKERS = resolveDefaultParseWorkers()
 export const GENERATED_INDEX_DIR_PREFIXES = ['.code_index_', '.index_'] as const
+export const CODE_INDEX_ENGINES = ['typescript', 'rust'] as const
+
+export type CodeIndexEngine = (typeof CODE_INDEX_ENGINES)[number]
+export type ResolvedCodeIndexEngine = CodeIndexEngine
 
 export const LANGUAGE_BY_EXTENSION: Record<string, CodeLanguage> = {
   '.ts': 'typescript',
@@ -99,6 +103,7 @@ const LANGUAGE_SUFFIX_ENTRIES = Object.entries(LANGUAGE_BY_EXTENSION).sort(
 )
 
 export type CodeIndexBuildOptions = {
+  engine?: CodeIndexEngine
   ignoredDirNames?: readonly string[]
   maxFiles?: number
   rootDir?: string
@@ -113,6 +118,7 @@ export type CodeIndexBuildOptions = {
 }
 
 export type CodeIndexConfig = {
+  engine: ResolvedCodeIndexEngine
   rootDir: string
   outputDir: string
   outputDirName: string
@@ -166,6 +172,16 @@ function normalizeParseWorkers(value: number | undefined): number {
   return Math.max(1, Math.trunc(value))
 }
 
+function normalizeEngine(value: CodeIndexEngine | undefined): ResolvedCodeIndexEngine {
+  if (!value) {
+    return 'typescript'
+  }
+  if (value !== 'typescript' && value !== 'rust') {
+    throw new Error(`Invalid code-index engine: ${String(value)}`)
+  }
+  return value
+}
+
 export function resolveCodeIndexConfig(
   options: CodeIndexBuildOptions = {},
 ): CodeIndexConfig {
@@ -176,6 +192,7 @@ export function resolveCodeIndexConfig(
     : resolve(rootDir, '.code_index')
 
   return {
+    engine: normalizeEngine(options.engine),
     rootDir,
     outputDir,
     outputDirName: basename(outputDir),

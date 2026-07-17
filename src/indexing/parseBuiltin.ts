@@ -52,12 +52,15 @@ function buildReadErrorModule(file: DiscoveredSourceFile): ModuleIR {
 
 function createParserConfig(maxFileBytes: number): CodeIndexConfig {
   return {
+    engine: 'typescript',
     rootDir: '',
     outputDir: '',
     outputDirName: '',
     maxFileBytes,
     parseWorkers: 1,
     ignoredDirNames: new Set<string>(),
+    discoverSourceStrategyPluginManifests: false,
+    sourceStrategyPluginManifests: new Set<string>(),
     sourceStrategyKinds: new Set<string>(),
   }
 }

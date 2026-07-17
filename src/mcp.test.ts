@@ -315,6 +315,74 @@ describe('mcp server', () => {
     }
   })
 
+  it('passes the rust engine option to build-index', async () => {
+    const root = await createTempRepo({
+      'src/lib.rs': [
+        'pub struct Widget;',
+        '',
+        'impl Widget {',
+        '  pub fn new() -> Self {',
+        '    Widget',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+    })
+
+    const transport = new StdioClientTransport({
+      command: 'bun',
+      args: ['run', 'src/mcp.ts'],
+      cwd: process.cwd(),
+      stderr: 'pipe',
+      env: {
+        ...process.env,
+        CODE_INDEX_RS_BIN: '/root/projects/code-index-rs/target/release/code-index-rs',
+      },
+    })
+    const client = new Client({
+      name: 'code-index-test',
+      version: '0.0.0',
+    })
+
+    try {
+      await client.connect(transport)
+      const tools = await client.listTools()
+      const buildTool = tools.tools.find(tool => tool.name === 'build-index')
+      expect(
+        (buildTool?.inputSchema as { properties?: Record<string, unknown> } | undefined)
+          ?.properties?.engine,
+      ).toBeTruthy()
+
+      const result = await client.callTool({
+        name: 'build-index',
+        arguments: {
+          rootDir: root,
+          engine: 'rust',
+          workers: 8,
+        },
+      })
+
+      const parsed = parseToolResult<{
+        result: {
+          engine: string
+          manifest: { moduleCount: number; languages: Record<string, number> }
+          parseWorkers: number
+          skillsWritten?: boolean
+        }
+      }>(result)
+
+      expect(parsed.result.engine).toBe('rust')
+      expect(parsed.result.parseWorkers).toBe(8)
+      expect(parsed.result.skillsWritten).toBe(false)
+      expect(parsed.result.manifest.moduleCount).toBe(1)
+      expect(parsed.result.manifest.languages.rust).toBe(1)
+    } finally {
+      await client.close()
+      await transport.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('exposes edge, symbol source, and skeleton tools', async () => {
     const root = await createTempRepo({
       'src/a.ts': [

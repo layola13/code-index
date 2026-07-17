@@ -8,6 +8,7 @@ export type ParsedIndexArgs =
     }
   | {
       kind: 'run'
+      engine?: 'typescript' | 'rust'
       ignoredDirNames?: string[]
       maxFiles?: number
       maxFileBytes?: number
@@ -75,6 +76,7 @@ export function parseIndexArgs(input: string): ParsedIndexArgs {
   }
 
   let rootDir = '.'
+  let engine: 'typescript' | 'rust' | undefined
   const ignoredDirNames: string[] = []
   let maxFiles: number | undefined
   let outputDir: string | undefined
@@ -98,6 +100,49 @@ export function parseIndexArgs(input: string): ParsedIndexArgs {
           message: 'Missing value for --output.',
         }
       }
+      continue
+    }
+
+    if (token.startsWith('--engine=')) {
+      const rawValue = token.slice('--engine='.length).trim()
+      if (
+        rawValue !== 'typescript' &&
+        rawValue !== 'ts' &&
+        rawValue !== 'rust' &&
+        rawValue !== 'rs'
+      ) {
+        return {
+          kind: 'error',
+          message: `Invalid --engine value: ${rawValue}`,
+        }
+      }
+      engine = rawValue === 'ts'
+        ? 'typescript'
+        : rawValue === 'rs'
+          ? 'rust'
+          : rawValue
+      continue
+    }
+
+    if (token === '--engine') {
+      const rawValue = tokens[index + 1]?.trim()
+      if (
+        rawValue !== 'typescript' &&
+        rawValue !== 'ts' &&
+        rawValue !== 'rust' &&
+        rawValue !== 'rs'
+      ) {
+        return {
+          kind: 'error',
+          message: `Invalid --engine value: ${rawValue ?? ''}`,
+        }
+      }
+      engine = rawValue === 'ts'
+        ? 'typescript'
+        : rawValue === 'rs'
+          ? 'rust'
+          : rawValue
+      index++
       continue
     }
 
@@ -287,6 +332,7 @@ export function parseIndexArgs(input: string): ParsedIndexArgs {
 
   return {
     kind: 'run',
+    engine,
     ignoredDirNames: ignoredDirNames.length > 0 ? ignoredDirNames : undefined,
     maxFiles,
     maxFileBytes,

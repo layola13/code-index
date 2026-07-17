@@ -170,6 +170,42 @@ new sessions do not depend on a login-shell `PATH`. 当前支持的工具有：
 5. 只需要文件名、目录名，或者只是一个大概路径猜测时，使用 Codex file search。
 6. 如果一个请求既像内容搜索又像路径搜索，优先选 `search`。
 
+## Build engines
+
+The plugin exposes one MCP server and one set of query tools. Builds can choose
+between the TypeScript engine and the Rust engine:
+
+```bash
+bun run src/cli.ts build . --engine typescript
+bun run src/cli.ts build /path/to/large/repo --engine rust --workers 8
+```
+
+MCP `build-index` accepts the same option:
+
+```json
+{
+  "rootDir": "/path/to/large/repo",
+  "engine": "rust",
+  "workers": 8
+}
+```
+
+`typescript` is the default and keeps full source-strategy and generated-skill
+behavior. `rust` delegates the build to `code-index-rs`, writes the same
+`.code_index` artifact layout, and leaves query tools unchanged. This keeps a
+single installed plugin while allowing large repositories to use the faster Rust
+builder.
+
+Rust engine lookup order:
+
+1. `CODE_INDEX_RS_BIN`
+2. `CODE_INDEX_RS_DIR`
+3. `engines/rust` inside this repository
+4. a sibling `../code-index-rs` checkout
+
+If a Rust project is found but the release binary is missing, the plugin runs
+`cargo build --release` for that Rust project.
+
 ## Source strategy indexing
 
 默认索引只处理 raw 源文件。对于 webpack、esbuild、vite、minified-js 这类产物，索引器会先检测文件特征，再看对应的 source strategy 是否启用：

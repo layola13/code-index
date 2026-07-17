@@ -38,6 +38,7 @@ import {
   type CodeIndexSkillPaths,
   writeCodeIndexSkills,
 } from "./skillWriter.js";
+import { buildCodeIndexWithRustEngine } from "./rustEngine.js";
 
 type ResolvedCodeIndexConfig = ReturnType<typeof resolveCodeIndexConfig>;
 
@@ -48,7 +49,7 @@ type ParseModuleArgs = {
 };
 
 export type BuildCodeIndexResult = {
-  engine: "typescript";
+  engine: "typescript" | "rust";
   fileLimitReached: boolean;
   incremental: CodeIndexIncrementalStats;
   maxFiles?: number;
@@ -57,6 +58,7 @@ export type BuildCodeIndexResult = {
   parseWorkers: number;
   rootDir: string;
   skillPaths: CodeIndexSkillPaths;
+  skillsWritten?: boolean;
   timings: CodeIndexTimings;
 };
 
@@ -652,6 +654,9 @@ export async function buildCodeIndex(
 ): Promise<BuildCodeIndexResult> {
   throwIfAborted(isAbortSignalLike(options.signal) ? options.signal : undefined)
   const config = resolveCodeIndexConfig(options);
+  if (config.engine === 'rust') {
+    return await buildCodeIndexWithRustEngine(options)
+  }
   await ensureSourceStrategyPluginsLoaded(
     {
       manifestPaths: [...config.sourceStrategyPluginManifests],
@@ -813,6 +818,7 @@ export async function buildCodeIndexWithDiscovery(
       parseWorkers: parsed.parseWorkers,
       rootDir: config.rootDir,
       skillPaths,
+      skillsWritten: true,
       timings: {
         buildEdgesMs,
         discoverMs,

@@ -38,4 +38,26 @@ describe('parseIndexArgs', () => {
     expect(parsed.kind).toBe('run')
     expect(parsed.sourceStrategyPluginManifests).toBeUndefined()
   })
+
+  it('parses rust engine aliases', () => {
+    const parsed = parseIndexArgs('build /repo --engine rs --workers 8')
+
+    expect(parsed.kind).toBe('run')
+    expect(parsed.rootDir).toBe('/repo')
+    expect(parsed.engine).toBe('rust')
+    expect(parsed.workers).toBe(8)
+  })
+
+  it('parses typescript engine aliases', () => {
+    const parsed = parseIndexArgs('build . --engine=ts')
+
+    expect(parsed.kind).toBe('run')
+    expect(parsed.engine).toBe('typescript')
+  })
+
+  it('rejects unknown engines', () => {
+    const parsed = parseIndexArgs('build . --engine go')
+
+    expect(parsed.kind).toBe('error')
+  })
 })

@@ -141,6 +141,11 @@ const TOOLS: ToolDefinition[] = [
           minimum: 1,
           description: 'Optional number of parse workers to use',
         },
+        engine: {
+          type: 'string',
+          enum: ['typescript', 'rust'],
+          description: 'Optional build engine. Defaults to typescript; rust uses code-index-rs for large repositories.',
+        },
         ignoredDirNames: {
           type: 'array',
           items: { type: 'string' },
@@ -388,6 +393,7 @@ async function handleBuildIndex(
   const result = await buildCodeIndex({
     rootDir,
     outputDir,
+    engine: getStringArg(args, 'engine') as 'typescript' | 'rust' | undefined,
     maxFiles: getNumberArg(args, 'maxFiles'),
     maxFileBytes: getNumberArg(args, 'maxFileBytes'),
     workers: getNumberArg(args, 'workers'),

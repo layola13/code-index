@@ -1,4 +1,5 @@
 node_modules
+engines/rust/target
 
 # code-index generated artifacts
 .code_index
