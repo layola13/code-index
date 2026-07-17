@@ -375,8 +375,16 @@ function tryParseLanguagePackModule(context: ParseContext): ModuleIR | null {
       ...classes.map(cls => cls.name),
       ...functions.map(fn => fn.name),
     ])
+    const moduleId = relativePathToModuleId(context.file.relativePath)
 
     return {
+      moduleId,
+      sourcePath: context.file.absolutePath,
+      relativePath: context.file.relativePath,
+      language: context.file.language,
+      parseMode: context.source.truncated
+        ? 'generic-language-pack-truncated'
+        : 'generic-language-pack',
       classes,
       errors: dedupeStrings((result.diagnostics ?? []).map(diag =>
         normalizeWhitespace(
@@ -385,13 +393,16 @@ function tryParseLanguagePackModule(context: ParseContext): ModuleIR | null {
             '',
         ),
       ).filter(Boolean)),
-      exportNames,
+      exports: exportNames,
       importStubs: [],
       imports,
       functions: dedupeByQualifiedName(functions),
       notes: [
         `tree-sitter language pack recovered structure for ${language}`,
       ],
+      sourceBytes: context.source.byteSize,
+      lineCount: lineStarts.length,
+      truncated: context.source.truncated,
     }
   } catch {
     return null
@@ -455,6 +466,11 @@ function mergeGenericModuleResults(
     moduleId: packResult.moduleId,
     sourcePath: packResult.sourcePath,
     relativePath: packResult.relativePath,
+    originPath: packResult.originPath ?? heuristicResult.originPath,
+    originStartLine:
+      packResult.originStartLine ?? heuristicResult.originStartLine,
+    originStartCharacter:
+      packResult.originStartCharacter ?? heuristicResult.originStartCharacter,
     language: packResult.language,
     parseMode: 'generic-language-pack+pattern',
     imports: dedupeStrings([...packResult.imports, ...heuristicResult.imports]),
@@ -469,6 +485,9 @@ function mergeGenericModuleResults(
     functions: dedupeByQualifiedName(functions),
     notes: dedupeStrings([...packResult.notes, ...heuristicResult.notes]),
     errors: dedupeStrings([...packResult.errors, ...heuristicResult.errors]),
+    sourceBytes: packResult.sourceBytes,
+    lineCount: packResult.lineCount,
+    truncated: packResult.truncated,
   }
 }
 

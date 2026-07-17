@@ -231,6 +231,8 @@ bun run src/cli.ts build .
 bun run src/cli.ts mcp
 ```
 
+`--workers` now uses real worker threads in Bun and Node for parse fan-out.
+
 ## Hook testing
 
 You can simulate the hook script directly:

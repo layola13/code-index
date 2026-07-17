@@ -5,7 +5,6 @@ import { Worker } from 'node:worker_threads'
 import type { DiscoveredSourceFile } from './discovery.js'
 import type { ModuleIR } from './ir.js'
 import type { BuiltinParseRequest } from './parseBuiltin.js'
-import { parseModuleWithBuiltinParsers } from './parseBuiltin.js'
 import type { LoadedSource } from './source.js'
 
 type ParseWorkerResponse =
@@ -25,7 +24,18 @@ type PendingRequest = {
 
 const WORKER_ENTRY_ENV = 'CLAUDE_CODE_INDEX_PARSE_WORKER_ENTRY'
 
-function resolveWorkerEntry(): URL {
+function resolveWorkerEntry(override?: string | URL): URL {
+  if (override instanceof URL) {
+    return override
+  }
+
+  if (typeof override === 'string' && override.trim()) {
+    const resolvedOverride = resolve(process.cwd(), override)
+    if (existsSync(resolvedOverride)) {
+      return pathToFileURL(resolvedOverride)
+    }
+  }
+
   const envOverride = process.env[WORKER_ENTRY_ENV]
   if (envOverride) {
     const resolvedOverride = resolve(process.cwd(), envOverride)
@@ -57,8 +67,8 @@ class ParseWorkerClient {
   private closed = false
   private pending: PendingRequest | null = null
 
-  constructor() {
-    this.worker = new Worker(resolveWorkerEntry())
+  constructor(workerEntry?: string | URL) {
+    this.worker = new Worker(resolveWorkerEntry(workerEntry))
     this.worker.on('message', this.handleMessage)
     this.worker.on('error', this.handleError)
     this.worker.on('exit', this.handleExit)
@@ -131,6 +141,7 @@ export async function parseModulesWithWorkerPool(args: {
   maxFileBytes: number
   sources?: ReadonlyMap<string, LoadedSource | undefined>
   onParsed?: () => void | Promise<void>
+  workerEntry?: string | URL
   workerCount: number
   signal?: AbortSignal
 }): Promise<ModuleIR[]> {
@@ -138,26 +149,12 @@ export async function parseModulesWithWorkerPool(args: {
     return []
   }
 
-  if (typeof process.versions.bun === 'string') {
-    const modules: ModuleIR[] = []
-    for (const file of args.files) {
-      args.signal?.throwIfAborted?.()
-      const source = args.sources?.get(file.relativePath)
-      modules.push(
-        await parseModuleWithBuiltinParsers({
-          file,
-          source,
-          maxFileBytes: args.maxFileBytes,
-        }),
-      )
-      await args.onParsed?.()
-    }
-    return modules
-  }
-
   const workerCount = Math.max(1, Math.min(args.workerCount, args.files.length))
   const results = new Array<ModuleIR>(args.files.length)
-  const workers = Array.from({ length: workerCount }, () => new ParseWorkerClient())
+  const workers = Array.from(
+    { length: workerCount },
+    () => new ParseWorkerClient(args.workerEntry),
+  )
   let nextIndex = 0
 
   try {
