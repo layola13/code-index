@@ -1,7 +1,6 @@
 ---
 name: "code-index"
-description: "Use the generated code index under ./.code_index as a code map to inspect repo structure, follow imports or calls, and narrow source reads before editing implementation files."
-when_to_use: "Use this as a blocking first step when a code index already exists and the task involves repository analysis, architecture tracing, symbol lookup, dependency follow-up, or locating implementation files. In large repos, use it before broad Grep/Glob scans or repo-wide source reads unless the index is stale or missing."
+description: "Use the generated code index under ./.code_index as a code map for repository analysis, architecture tracing, symbol lookup, dependency follow-up, and locating implementation files before broad source reads."
 ---
 
 # Code Index
@@ -22,6 +21,12 @@ when_to_use: "Use this as a blocking first step when a code index already exists
 - The skeleton is not the source of truth for exact logic, syntax, comments, formatting, or language-specific edge cases; confirm against the original files before making precise code claims.
 - Only fall back to full source-file reads when the index is stale, missing, or insufficient for the question at hand.
 - If the index is stale after edits, rerun `/index`.
+
+## Build Routing
+- Use MCP `build-index` with `engine: "typescript"` by default.
+- For very large repositories, Rust/C/C++ monorepos, compiler repositories, or projects where the TypeScript engine is too slow or times out, prefer MCP `build-index` with `engine: "rust"` and `workers: 8`.
+- Example Rust-engine rebuild: `{"rootDir": "/path/to/project", "engine": "rust", "workers": 8}`.
+- The Rust engine only changes index construction. Continue using the same `search`, `search-modules`, `search-symbols`, `search-edges`, `get-symbol-source`, `list-skeletons`, and `read-skeleton` tools to query the generated `.code_index`.
 
 ## Search Routing
 - Decide the target type first, then pick exactly one search tool.

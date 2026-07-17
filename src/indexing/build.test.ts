@@ -445,7 +445,7 @@ def top_level(value: str) -> None:
         "utf8",
       );
       expect(claudeSkillText).toContain('name: "code-index"');
-      expect(claudeSkillText).toContain("when_to_use:");
+      expect(claudeSkillText).not.toContain("when_to_use:");
       expect(claudeSkillText).toContain(
         "`./.code_index/index/architecture.dot`",
       );
@@ -465,6 +465,8 @@ def top_level(value: str) -> None:
       );
       expect(claudeSkillText).toContain("code map only");
       expect(claudeSkillText).toContain("read the original source");
+      expect(claudeSkillText).toContain("## Build Routing");
+      expect(claudeSkillText).toContain('engine: "rust"');
       expect(claudeSkillText).not.toContain("references.jsonl");
       expect(claudeSkillText).not.toContain("source_lines");
 
@@ -473,7 +475,7 @@ def top_level(value: str) -> None:
         "utf8",
       );
       expect(codexSkillText).toContain('name: "code-index"');
-      expect(codexSkillText).toContain("when_to_use:");
+      expect(codexSkillText).not.toContain("when_to_use:");
       expect(codexSkillText).toContain(
         "`./.code_index/index/architecture.dot`",
       );
@@ -490,6 +492,8 @@ def top_level(value: str) -> None:
       );
       expect(codexSkillText).toContain("code map only");
       expect(codexSkillText).toContain("read the original source");
+      expect(codexSkillText).toContain("## Build Routing");
+      expect(codexSkillText).toContain('engine: "rust"');
       expect(codexSkillText).not.toContain("references.jsonl");
       expect(codexSkillText).not.toContain("source_lines");
 

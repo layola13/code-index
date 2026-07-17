@@ -26,7 +26,7 @@ import { errorMessage } from './utils/errors.js'
 import { searchHistoryEntries } from './historySearch.js'
 import { searchSourceFiles } from './sourceSearch.js'
 
-const SERVER_VERSION = '0.1.0'
+const SERVER_VERSION = '0.1.1'
 
 type ToolDefinition = {
   description: string
