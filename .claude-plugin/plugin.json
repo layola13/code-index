@@ -1,0 +1,8 @@
+{
+  "name": "code-index",
+  "version": "0.1.1",
+  "description": "Build and query repository code indexes through Claude Code skills and MCP tools.",
+  "author": {
+    "name": "code-index"
+  }
+}
