@@ -514,7 +514,14 @@ fn write_skeletons(output_dir: &Path, modules: &[ModuleIr]) -> Result<()> {
             ));
         }
         if module.classes.is_empty() && module.functions.is_empty() {
-            lines.push("# no indexed symbols".to_string());
+            if !module.exports.is_empty() {
+                lines.push("# exports:".to_string());
+                for exp in &module.exports {
+                    lines.push(format!("def {}(...): ...", safe_python_identifier(exp)));
+                }
+            } else {
+                lines.push("# no indexed symbols".to_string());
+            }
         }
         fs::write(target, lines.join("\n") + "\n")?;
     }

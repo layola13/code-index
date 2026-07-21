@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "code-index-local",
+  "description": "Local Claude Code marketplace for the code-index plugin.",
+  "owner": {
+    "name": "code-index"
+  },
+  "plugins": [
+    {
+      "name": "code-index",
+      "description": "Build and query repository code indexes through Claude Code skills and MCP tools.",
+      "author": {
+        "name": "code-index"
+      },
+      "source": ".",
+      "category": "development",
+      "homepage": "file:///home/vscode/projects/code-index"
+    }
+  ]
+}

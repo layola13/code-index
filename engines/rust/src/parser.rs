@@ -49,6 +49,18 @@ static C_LIKE_FN_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\s*[A-Za-z_][A-Za-z0-9_<>\s:*&]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{")
         .unwrap()
 });
+static JS_ARROW_FN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(async\s+)?(?:\(([^)]*)\)|([A-Za-z_][A-Za-z0-9_]*))\s*=>")
+        .unwrap()
+});
+static JS_DEFAULT_EXPORT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*export\s+default\s+(?:([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)|(?:function\s*)?\(([^)]*)\)|([A-Za-z_][A-Za-z0-9_]*))")
+        .unwrap()
+});
+static JS_TOP_LEVEL_CONST_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=")
+        .unwrap()
+});
 static CALL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b([A-Za-z_][A-Za-z0-9_:]*)\s*(?:::\s*<[^>\n]+>)?\s*\(").unwrap());
 static MACRO_CALL_RE: Lazy<Regex> =
@@ -367,6 +379,26 @@ fn function_match<'a>(
                 cap.get(3).map(|m| m.as_str()),
                 line.contains("async "),
             ))
+        })
+        .or_else(|| {
+            JS_ARROW_FN_RE.captures(line).and_then(|cap| {
+                let name = cap.get(1)?.as_str();
+                let params = cap.get(3).or_else(|| cap.get(4)).map(|m| m.as_str()).unwrap_or("");
+                Some((name, params, None, line.contains("async ")))
+            })
+        })
+        .or_else(|| {
+            JS_DEFAULT_EXPORT_RE.captures(line).and_then(|cap| {
+                let name = cap.get(1).or_else(|| cap.get(4)).map(|m| m.as_str()).unwrap_or("default");
+                let params = cap.get(2).or_else(|| cap.get(3)).map(|m| m.as_str()).unwrap_or("");
+                Some((name, params, None, false))
+            })
+        })
+        .or_else(|| {
+            JS_TOP_LEVEL_CONST_RE.captures(line).and_then(|cap| {
+                let name = cap.get(1)?.as_str();
+                Some((name, "", None, false))
+            })
         })
         .or_else(|| {
             C_LIKE_FN_RE.captures(line).and_then(|cap| {
