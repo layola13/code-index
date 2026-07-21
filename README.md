@@ -97,6 +97,64 @@ Do not keep a separate global `mcp_servers.code-index` entry once the plugin is 
 
 This Codex-specific wiring is only an adapter around the portable core. If you are using another CLI, you can ignore the plugin and talk to the CLI or MCP server directly.
 
+## Use with AGY CLI (Antigravity)
+
+`agy` (Google Antigravity CLI) 原生支持 MCP 服务器，但**读取的是它自己的配置文件**，而不是本仓库的 `.mcp.json` 或 `.codex-plugin/plugin.json`。所以接入 agy 时不要走 Codex 插件路径，直接在全局或项目级 MCP config 里登记即可。
+
+### 推荐：全局配置 `~/.gemini/config/mcp_config.json`
+
+所有 agy 会话共享这一份配置：
+
+```json
+{
+  "mcpServers": {
+    "code-index": {
+      "command": "sh",
+      "args": ["/absolute/path/to/code-index/scripts/run-mcp.sh"]
+    }
+  }
+}
+```
+
+注意：
+
+- 把 `/absolute/path/to/code-index` 替换为本仓库的实际绝对路径。
+- **不要写 `cwd`**。`scripts/run-mcp.sh` 已经用 `script_dir=$(cd "$(dirname "$0")" && pwd -P)` 自定位 `plugin_root`，再 `plugin_root/src/mcp.ts`，所以从任意工作目录启动 agy 都能正确找到 MCP 入口脚本。这是它跟 Codex 的 `.mcp.json` 里 `cwd: "."` 行为不同的关键点 —— agy 不会把那条相对的 `args` 解析成 plugin 目录内的路径，所以必须用绝对路径 args。
+- 也不需要 `type: "stdio"`，agy 默认就是 stdio。
+- 可选字段：`env` 透传环境变量（如 `CODE_INDEX_RS_BIN`）、`disabled: true` 临时停用、`serverUrl` 接远程 MCP（旧字段 `url`/`httpUrl` 已废弃）。
+
+### 项目级配置 `.agents/mcp_config.json`
+
+只在某个项目里用 code-index 时，在该项目根创建 `<repo>/.agents/mcp_config.json`，内容同上。`cd` 进该项目后跑 `agy` 才会加载，与全局配置合并。
+
+### 验证连接
+
+1. 启动 `agy`
+2. 在 prompt 里输入 `/mcp` 打开 MCP Manager Overlay，看到 `code-index` 标 ✅ 即成功
+3. 首次查询前为被索引项目构建一次 `.code_index`：在 agy 会话里说 "为 /path/to/repo 构建 code-index 索引" 即会触发 `build-index` 工具调用，写入 `/path/to/repo/.code_index/`
+
+### 关于 `agy plugin install <dir>` —— 对本插件不推荐
+
+`agy plugin install /path/to/code-index` 也能识别本仓库——它会 stage 一份 plugin 到 `~/.gemini/config/plugins/code-index/`，并在那里生成一个 `mcp_config.json`，但**内部 args 用相对路径**（`scripts/run-mcp.sh`）+ `cwd: "."`。当 agy 从其它项目启动时，这条相对路径会找不到文件并报：
+
+```
+sh: 0: cannot open scripts/run-mcp.sh: No such file
+connection closed: calling "initialize": client is closing: EOF
+```
+
+因此对本插件，请直接用上一节的全局 `~/.gemini/config/mcp_config.json` 写绝对路径，跳过 `agy plugin install`。如果已经误装过，先 `agy plugin uninstall code-index` 清理，再手工把 mcp server 写进全局 mcp_config。
+
+### 与 Codex 配置并存
+
+如果你同时用 Codex 和 agy，方案是：
+
+- Codex：保留仓库根的 [.mcp.json](.mcp.json) + `.codex-plugin/plugin.json`，通过 `codex plugin marketplace add ..` 启用插件
+- agy：单独在 `~/.gemini/config/mcp_config.json` 写一条带绝对路径的条目，**不要** `agy plugin install` 本目录
+
+两边互不影响，都调用同一个 `scripts/run-mcp.sh` 入口和同一份 `src/mcp.ts` 实现。
+
+
+
 ## Hook behavior
 
 The plugin does not register automatic lifecycle hooks by default. The model can
