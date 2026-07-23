@@ -26,6 +26,13 @@ The indexer has first-class AST parsing for:
 
 Other extensions still participate through the generic parser, so unsupported languages can still produce usable class/function skeletons and import hints.
 
+Shell scripts (`.sh`, `.bash`, and `.zsh`) receive additional heuristic
+handling: function declarations, sourced files, and top-level assignments are
+kept visible in the skeleton. Export-only modules also render named
+`Any = ...` placeholders instead of collapsing to an empty `...` file. Files
+without declarations receive a searchable `__module_summary__` containing
+source metadata, imports, parser notes, and errors.
+
 If an AST parser or binding fails at runtime, the build falls back to the heuristic parser instead of returning an empty success result.
 
 ## Project layout
@@ -253,6 +260,11 @@ behavior. `rust` delegates the build to `code-index-rs`, writes the same
 `.code_index` artifact layout, and leaves query tools unchanged. This keeps a
 single installed plugin while allowing large repositories to use the faster Rust
 builder.
+
+The Rust engine's skeletons retain named/tuple struct fields and merge inherent
+and trait `impl` blocks back into the target type, so methods are not emitted as
+detached `impl_*` classes. Rust generic container types are rendered as readable
+Python-style annotations where possible.
 
 Rust engine lookup order:
 

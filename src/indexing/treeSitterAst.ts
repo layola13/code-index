@@ -1,7 +1,7 @@
 import { createRequire } from 'module'
 import { dirname, extname, posix } from 'path'
 
-import type { ClassIR, FunctionIR, ModuleIR, ParamIR } from './ir.js'
+import type { ClassIR, FieldIR, FunctionIR, ModuleIR, ParamIR } from './ir.js'
 import {
   cleanTypeReference,
   computeLineStarts,
@@ -331,6 +331,7 @@ function buildClassIR(args: {
   decorators?: string[]
   dependsOn?: string[]
   exported: boolean
+  fields?: FieldIR[]
   lineStarts: readonly number[]
   methods: FunctionIR[]
   moduleId: string
@@ -351,6 +352,7 @@ function buildClassIR(args: {
       : `${args.moduleId}::${args.name}`,
     bases: dedupeStrings(args.bases),
     dependsOn: dedupeStrings(args.dependsOn ?? []),
+    fields: args.fields ?? [],
     methods: args.methods,
     exported: args.exported,
     sourceLines: lineRangeFromOffsets(
@@ -971,6 +973,18 @@ function parseTsJsModule(args: {
       ...target.dependsOn,
       ...heuristicClass.dependsOn,
     ])
+    const fieldMap = new Map((target.fields ?? []).map(field => [field.name, field]))
+    for (const heuristicField of heuristicClass.fields ?? []) {
+      const field = fieldMap.get(heuristicField.name)
+      if (!field) {
+        target.fields = [...(target.fields ?? []), heuristicField]
+        fieldMap.set(heuristicField.name, heuristicField)
+        continue
+      }
+      field.annotation = field.annotation ?? heuristicField.annotation
+      field.defaultValue = field.defaultValue ?? heuristicField.defaultValue
+      field.isPublic = field.isPublic || heuristicField.isPublic
+    }
     const methodMap = new Map(target.methods.map(method => [method.qualifiedName, method]))
     for (const heuristicMethod of heuristicClass.methods) {
       const method = methodMap.get(heuristicMethod.qualifiedName)
@@ -1587,6 +1601,9 @@ function parseRustFunctionLike(
   }
   const returnType = node.childForFieldName('return_type')?.text?.trim()
   const params = parseRustParameters(sourceText, parameters)
+  const hasReceiver = parameters.namedChildren.some(child => child.type === 'self_parameter')
+  const isStatic = Boolean(ownerClassName) && !hasReceiver
+  const signatureText = sourceText.slice(node.startIndex, body?.startIndex ?? node.endIndex)
   return {
     kind: ownerClassName ? 'method' : 'function',
     name,
@@ -1595,16 +1612,77 @@ function parseRustFunctionLike(
       : `${moduleId}::${name}`,
     params,
     returns: returnType ? cleanTypeReference(returnType) : undefined,
-    decorators: [],
+    decorators: isStatic ? ['staticmethod'] : [],
     calls: extractCallTargets(getBodyText(sourceText, body)),
     awaits: [],
     raises: [],
-    isAsync: false,
+    isAsync: /\basync\b/.test(signatureText),
     isPublic: true,
     exported: true,
     sourceLines: lineRangeFromOffsets(lineStarts, node.startIndex, body?.endIndex ?? node.endIndex),
     originPath,
   }
+}
+
+function rustTypeName(value: string): string {
+  const normalized = cleanTypeReference(value)
+    .replace(/^&(?:'[^\s]+\s+)?(?:mut\s+)?/, '')
+    .replace(/^(?:dyn|impl)\s+/, '')
+  const withoutGenerics = normalized.split('<', 1)[0] ?? normalized
+  return withoutGenerics.split('::').pop()?.trim() ?? withoutGenerics
+}
+
+function parseRustFields(
+  sourceText: string,
+  lineStarts: readonly number[],
+  body: SyntaxNode | null | undefined,
+): FieldIR[] {
+  if (!body) {
+    return []
+  }
+
+  if (body.type === 'field_declaration_list') {
+    return body.namedChildren
+      .filter(child => child.type === 'field_declaration')
+      .map(child => {
+        const name = child.childForFieldName('name')?.text?.trim()
+        const annotation = child.childForFieldName('type')?.text?.trim()
+        if (!name) {
+          return null
+        }
+        return {
+          name,
+          annotation: annotation || undefined,
+          isPublic: child.text.trimStart().startsWith('pub'),
+          sourceLines: lineRangeFromOffsets(lineStarts, child.startIndex, child.endIndex),
+        } satisfies FieldIR
+      })
+      .filter((field): field is FieldIR => Boolean(field))
+  }
+
+  if (body.type !== 'ordered_field_declaration_list') {
+    return []
+  }
+
+  // Tuple structs expose their types as repeated `type` fields rather than
+  // named field nodes. Keep positional names stable so they remain searchable.
+  const typeNodes = body.namedChildren.filter(
+    child => !['attribute_item', 'visibility_modifier'].includes(child.type),
+  )
+  if (typeNodes.length === 0) {
+    const tupleText = body.text.trim().replace(/^\(/, '').replace(/\)$/, '')
+    return splitTopLevel(tupleText, ',').filter(Boolean).map((annotation, index) => ({
+      name: `_${index}`,
+      annotation: cleanTypeReference(annotation),
+      isPublic: false,
+    }))
+  }
+  return typeNodes.map((child, index) => ({
+    name: `_${index}`,
+    annotation: child.text.trim() || undefined,
+    isPublic: body.text.trimStart().startsWith('pub'),
+    sourceLines: lineRangeFromOffsets(lineStarts, child.startIndex, child.endIndex),
+  }))
 }
 
 function parseRustModuleAst(args: {
@@ -1646,6 +1724,9 @@ function parseRustModuleAst(args: {
         bases: [],
         dependsOn: [],
         exported: true,
+        fields: child.type === 'struct_item'
+          ? parseRustFields(args.sourceText, lineStarts, body)
+          : [],
         lineStarts,
         methods: [],
         moduleId: args.moduleId,
@@ -1676,11 +1757,12 @@ function parseRustModuleAst(args: {
       if (!targetType || !body) {
         continue
       }
-      const className = cleanTypeReference(targetType)
+      const className = rustTypeName(targetType)
+      const traitName = child.childForFieldName('trait')?.text?.trim()
       const classIR =
         classes.get(className) ??
         buildClassIR({
-          bases: [],
+          bases: traitName ? [rustTypeName(traitName)] : [],
           dependsOn: [],
           exported: true,
           lineStarts,
@@ -1700,6 +1782,15 @@ function parseRustModuleAst(args: {
         if (fn) {
           classIR.methods.push(fn)
         }
+      }
+      const implLines = lineRangeFromOffsets(lineStarts, child.startIndex, child.endIndex)
+      classIR.sourceLines.start = Math.min(classIR.sourceLines.start, implLines.start)
+      classIR.sourceLines.end = Math.max(classIR.sourceLines.end, implLines.end)
+      if (traitName) {
+        classIR.bases = dedupeStrings([
+          ...classIR.bases,
+          rustTypeName(traitName),
+        ])
       }
       classes.set(className, classIR)
       continue
@@ -3663,6 +3754,18 @@ function mergeModuleResults(
     }
     target.bases = dedupeStrings([...target.bases, ...heuristicClass.bases])
     target.dependsOn = dedupeStrings([...target.dependsOn, ...heuristicClass.dependsOn])
+    const fieldMap = new Map((target.fields ?? []).map(field => [field.name, field]))
+    for (const heuristicField of heuristicClass.fields ?? []) {
+      const field = fieldMap.get(heuristicField.name)
+      if (!field) {
+        target.fields = [...(target.fields ?? []), heuristicField]
+        fieldMap.set(heuristicField.name, heuristicField)
+        continue
+      }
+      field.annotation = field.annotation ?? heuristicField.annotation
+      field.defaultValue = field.defaultValue ?? heuristicField.defaultValue
+      field.isPublic = field.isPublic || heuristicField.isPublic
+    }
     const methodMap = new Map(target.methods.map(method => [method.qualifiedName, method]))
     for (const heuristicMethod of heuristicClass.methods) {
       const method = methodMap.get(heuristicMethod.qualifiedName)

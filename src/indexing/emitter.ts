@@ -165,7 +165,15 @@ function renderFunction(
     .map(renderParam);
 
   if (options.insideClass) {
-    params.unshift("self");
+    const isStatic = fn.decorators.some(
+      (decorator) => decorator.replace(/^@/, "") === "staticmethod",
+    );
+    if (!isStatic) {
+      params.unshift("self");
+    }
+    if (isStatic) {
+      lines.push(`${indent}@staticmethod`);
+    }
   }
 
   const returns =
@@ -176,6 +184,15 @@ function renderFunction(
   );
   lines.push(...renderFunctionBody(fn, options));
   return lines;
+}
+
+function renderField(field: NonNullable<ClassIR["fields"]>[number]): string {
+  const annotation = pythonizeType(field.annotation);
+  const rawAnnotation = field.annotation?.trim();
+  const comment = annotation === "Any" && rawAnnotation
+    ? `  # source type: ${rawAnnotation.replace(/\s+/g, " ")}`
+    : "";
+  return `${safePythonIdentifier(field.name, "field")}: ${annotation} = ...${comment}`;
 }
 
 function renderClass(cls: ClassIR): string[] {
@@ -190,9 +207,17 @@ function renderClass(cls: ClassIR): string[] {
       : `class ${className}:`,
   );
 
-  if (cls.methods.length === 0) {
+  const fields = cls.fields ?? [];
+  if (fields.length === 0 && cls.methods.length === 0) {
     lines.push("    ...");
     return lines;
+  }
+
+  for (const field of fields) {
+    lines.push(`    ${renderField(field)}`);
+  }
+  if (fields.length > 0 && cls.methods.length > 0) {
+    lines.push("");
   }
 
   const renderedMethods = cls.methods.flatMap((method, index) => [
@@ -203,8 +228,46 @@ function renderClass(cls: ClassIR): string[] {
   return lines;
 }
 
+function renderExportPlaceholders(module: ModuleIR): string[] {
+  const represented = new Set([
+    ...module.classes.map(cls => cls.name),
+    ...module.functions.map(fn => fn.name),
+    ...module.classes.flatMap(cls => cls.methods.map(method => method.name)),
+    ...module.classes.flatMap(cls => (cls.fields ?? []).map(field => field.name)),
+  ]);
+  const exports = dedupeStrings(module.exports)
+    .filter(name => !represented.has(name))
+    .map(name => safePythonIdentifier(name, "exported_value"));
+
+  return exports.map(name => name + ": Any = ...");
+}
+
+function renderModuleSummary(module: ModuleIR): string[] {
+  return [
+    "__module_summary__: Any = {",
+    `    "source": ${JSON.stringify(module.relativePath)},`,
+    `    "language": ${JSON.stringify(module.language)},`,
+    `    "parse_mode": ${JSON.stringify(module.parseMode)},`,
+    `    "source_lines": ${module.lineCount},`,
+    `    "source_bytes": ${module.sourceBytes},`,
+    `    "truncated": ${module.truncated ? "True" : "False"},`,
+    `    "imports": ${JSON.stringify(dedupeStrings(module.imports))},`,
+    `    "exports": ${JSON.stringify(dedupeStrings(module.exports))},`,
+    ...(module.notes.length > 0
+      ? [`    "notes": ${JSON.stringify(dedupeStrings(module.notes))},`]
+      : []),
+    ...(module.errors.length > 0
+      ? [`    "errors": ${JSON.stringify(dedupeStrings(module.errors))},`]
+      : []),
+    "}",
+  ];
+}
+
 function renderModuleSkeleton(module: ModuleIR): string {
-  const lines: string[] = ["from __future__ import annotations"];
+  const lines: string[] = [
+    "from __future__ import annotations",
+    "from typing import Any",
+  ];
 
   if (module.importStubs.length > 0) {
     lines.push("", ...dedupeStrings(module.importStubs));
@@ -212,8 +275,13 @@ function renderModuleSkeleton(module: ModuleIR): string {
 
   lines.push("");
 
-  if (module.classes.length === 0 && module.functions.length === 0) {
-    lines.push("...");
+  const exportPlaceholders = renderExportPlaceholders(module);
+  if (
+    module.classes.length === 0 &&
+    module.functions.length === 0 &&
+    exportPlaceholders.length === 0
+  ) {
+    lines.push(...renderModuleSummary(module));
     return lines.join("\n") + "\n";
   }
 
@@ -230,6 +298,13 @@ function renderModuleSkeleton(module: ModuleIR): string {
       body.push("");
     }
     body.push(...renderFunction(fn, { indent: "", insideClass: false }));
+  }
+
+  if (exportPlaceholders.length > 0) {
+    if (body.length > 0) {
+      body.push("");
+    }
+    body.push(...exportPlaceholders);
   }
 
   return [...lines, ...body].join("\n") + "\n";

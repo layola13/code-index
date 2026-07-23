@@ -29,6 +29,14 @@ export type ParamIR = {
   defaultValue?: string
 }
 
+export type FieldIR = {
+  name: string
+  annotation?: string
+  defaultValue?: string
+  isPublic?: boolean
+  sourceLines?: SourceLineRange
+}
+
 export type FunctionIR = {
   kind: 'function' | 'method'
   name: string
@@ -51,6 +59,7 @@ export type ClassIR = {
   qualifiedName: string
   bases: string[]
   dependsOn: string[]
+  fields?: FieldIR[]
   methods: FunctionIR[]
   exported: boolean
   sourceLines: SourceLineRange

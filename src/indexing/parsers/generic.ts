@@ -427,6 +427,18 @@ function mergeGenericModuleResults(
     }
     target.bases = dedupeStrings([...target.bases, ...heuristicClass.bases])
     target.dependsOn = dedupeStrings([...target.dependsOn, ...heuristicClass.dependsOn])
+    const fieldMap = new Map((target.fields ?? []).map(field => [field.name, field]))
+    for (const heuristicField of heuristicClass.fields ?? []) {
+      const field = fieldMap.get(heuristicField.name)
+      if (!field) {
+        target.fields = [...(target.fields ?? []), heuristicField]
+        fieldMap.set(heuristicField.name, heuristicField)
+        continue
+      }
+      field.annotation = field.annotation ?? heuristicField.annotation
+      field.defaultValue = field.defaultValue ?? heuristicField.defaultValue
+      field.isPublic = field.isPublic || heuristicField.isPublic
+    }
     const methodMap = new Map(target.methods.map(method => [method.qualifiedName, method]))
     for (const heuristicMethod of heuristicClass.methods) {
       const method = methodMap.get(heuristicMethod.qualifiedName)

@@ -75,7 +75,6 @@ describe('mcp server', () => {
       name: 'code-index-test',
       version: '0.0.0',
     })
-
     try {
       await client.connect(transport)
 
@@ -334,10 +333,6 @@ describe('mcp server', () => {
       args: ['run', 'src/mcp.ts'],
       cwd: process.cwd(),
       stderr: 'pipe',
-      env: {
-        ...process.env,
-        CODE_INDEX_RS_BIN: '/root/projects/code-index-rs/target/release/code-index-rs',
-      },
     })
     const client = new Client({
       name: 'code-index-test',
@@ -413,6 +408,17 @@ describe('mcp server', () => {
 
     try {
       await client.connect(transport)
+
+      // Bun 1.3.14 can crash inside native tree-sitter workers when the
+      // default pool is used; seed this fixture with a single-worker build
+      // before exercising the read-only MCP tools.
+      await client.callTool({
+        name: 'build-index',
+        arguments: {
+          rootDir: root,
+          workers: 1,
+        },
+      })
 
       const tools = await client.listTools()
       const toolNames = tools.tools.map(tool => tool.name)

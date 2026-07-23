@@ -142,7 +142,7 @@ fn build(args: BuildArgs) -> Result<()> {
             .map(|file| {
                 let module = parse_source_file(file, args.max_file_bytes);
                 let completed = parsed.fetch_add(1, Ordering::Relaxed) + 1;
-                if completed == total || completed % 1000 == 0 {
+                if completed == total || completed.is_multiple_of(1000) {
                     eprintln!("Parsed {completed}/{total} source files");
                 }
                 module

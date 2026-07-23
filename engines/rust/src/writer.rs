@@ -40,6 +40,9 @@ fn module_aliases(path: &str) -> Vec<String> {
         .or_else(|| path.strip_suffix(".tsx"))
         .or_else(|| path.strip_suffix(".js"))
         .or_else(|| path.strip_suffix(".py"))
+        .or_else(|| path.strip_suffix(".sh"))
+        .or_else(|| path.strip_suffix(".bash"))
+        .or_else(|| path.strip_suffix(".zsh"))
         .unwrap_or(path);
     let mut aliases = vec![path.to_string(), without_ext.to_string()];
     if let Some(dir) = without_ext.strip_suffix("/mod") {
@@ -132,6 +135,9 @@ fn resolve_import_path(
             format!("{normalized}.tsx"),
             format!("{normalized}.js"),
             format!("{normalized}.py"),
+            format!("{normalized}.sh"),
+            format!("{normalized}.bash"),
+            format!("{normalized}.zsh"),
         ];
         for variant in variants {
             if let Some(path) = alias_map.get(&variant) {
@@ -425,25 +431,65 @@ fn render_architecture_dot(edges: &[EdgeIr]) -> String {
     lines.join("\n") + "\n"
 }
 
-fn skeleton_relative_path(relative_path: &str) -> String {
+fn skeleton_relative_path(relative_path: &str, used_paths: &mut HashSet<String>) -> String {
     let path = Path::new(relative_path);
     let stem = path
         .file_stem()
         .map(|stem| stem.to_string_lossy())
         .unwrap_or_else(|| "module".into());
-    if let Some(parent) = path.parent() {
-        let parent = parent.to_string_lossy().replace('\\', "/");
-        if parent.is_empty() {
-            format!("{stem}.py")
-        } else {
-            format!("{parent}/{stem}.py")
-        }
-    } else {
+    let parent = path
+        .parent()
+        .map(|value| value.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let candidate = if parent.is_empty() {
         format!("{stem}.py")
+    } else {
+        format!("{parent}/{stem}.py")
+    };
+    if used_paths.insert(candidate.clone()) {
+        return candidate;
+    }
+
+    let base = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "module".into());
+    let suffix = base
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let mut counter = 0usize;
+    loop {
+        let disambiguated_stem = if counter == 0 {
+            format!("{stem}__{suffix}")
+        } else {
+            format!("{stem}__{suffix}_{counter}")
+        };
+        let disambiguated = if parent.is_empty() {
+            format!("{disambiguated_stem}.py")
+        } else {
+            format!("{parent}/{disambiguated_stem}.py")
+        };
+        if used_paths.insert(disambiguated.clone()) {
+            return disambiguated;
+        }
+        counter += 1;
     }
 }
 
 fn safe_python_identifier(value: &str) -> String {
+    const PYTHON_KEYWORDS: &[&str] = &[
+        "and", "as", "assert", "async", "await", "break", "case", "class", "continue", "def",
+        "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
+        "is", "lambda", "match", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+        "while", "with", "yield",
+    ];
     let mut out = String::new();
     for ch in value.chars() {
         if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -452,29 +498,362 @@ fn safe_python_identifier(value: &str) -> String {
             out.push('_');
         }
     }
-    let mut out = out.trim_matches('_').to_string();
     if out.is_empty() {
         out = "symbol".to_string();
     }
     if out.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
         out.insert(0, '_');
     }
+    if PYTHON_KEYWORDS.contains(&out.as_str()) {
+        out.push('_');
+    }
     out
+}
+
+fn render_call_target(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .trim_end_matches('!')
+        .replace("::", ".")
+        .replace('$', "_");
+    if normalized.is_empty() {
+        return None;
+    }
+    let segments = normalized
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .map(safe_python_identifier)
+        .collect::<Vec<_>>();
+    (!segments.is_empty()).then(|| format!("{}(...)", segments.join(".")))
+}
+
+fn split_type_arguments(value: &str) -> Option<(&str, &str)> {
+    let open = value.find('<')?;
+    let mut depth = 0usize;
+    let mut close = None;
+    for (index, ch) in value.char_indices().skip(open) {
+        match ch {
+            '<' => depth += 1,
+            '>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close = Some(index);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    if !value[close + 1..].trim().is_empty() {
+        return None;
+    }
+    Some((value[..open].trim(), &value[open + 1..close]))
+}
+
+fn render_rust_type(raw: &str) -> String {
+    let mut value = raw.trim().trim_end_matches(',').trim();
+    while let Some(rest) = value.strip_prefix('&') {
+        value = rest.trim_start();
+        if value.starts_with("'") {
+            value = value
+                .split_once(char::is_whitespace)
+                .map(|(_, rest)| rest.trim_start())
+                .unwrap_or(value);
+        }
+    }
+    if let Some(rest) = value.strip_prefix("mut ") {
+        value = rest.trim_start();
+    }
+    if let Some(rest) = value.strip_prefix("*const ") {
+        value = rest.trim_start();
+    } else if let Some(rest) = value.strip_prefix("*mut ") {
+        value = rest.trim_start();
+    }
+
+    if value == "()" {
+        return "None".to_string();
+    }
+    if let Some(inner) = value
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let element = inner
+            .split_once(';')
+            .map(|(element, _)| element)
+            .unwrap_or(inner);
+        return format!("list[{}]", render_rust_type(element));
+    }
+    if value.starts_with('(') && value.ends_with(')') {
+        let inner = &value[1..value.len() - 1];
+        let args = inner
+            .split(',')
+            .map(render_rust_type)
+            .filter(|value| value != "Any")
+            .collect::<Vec<_>>();
+        if !args.is_empty() {
+            return format!("tuple[{}]", args.join(", "));
+        }
+    }
+
+    if let Some((outer, arguments)) = split_type_arguments(value) {
+        let outer_name = outer
+            .rsplit("::")
+            .next()
+            .map(safe_python_identifier)
+            .unwrap_or_else(|| "Any".to_string());
+        let args = split_type_arguments_top_level(arguments)
+            .into_iter()
+            .map(render_rust_type)
+            .collect::<Vec<_>>();
+        return match outer_name.as_str() {
+            "Vec" | "VecDeque" => format!(
+                "list[{}]",
+                args.first().cloned().unwrap_or_else(|| "Any".to_string())
+            ),
+            "HashSet" | "BTreeSet" => format!(
+                "set[{}]",
+                args.first().cloned().unwrap_or_else(|| "Any".to_string())
+            ),
+            "HashMap" | "BTreeMap" => format!(
+                "dict[{}, {}]",
+                args.first().cloned().unwrap_or_else(|| "Any".to_string()),
+                args.get(1).cloned().unwrap_or_else(|| "Any".to_string())
+            ),
+            "Option" => format!(
+                "{} | None",
+                args.first().cloned().unwrap_or_else(|| "Any".to_string())
+            ),
+            "Result" => args.first().cloned().unwrap_or_else(|| "Any".to_string()),
+            "Box" | "Arc" | "Rc" | "Pin" | "Cow" => {
+                args.first().cloned().unwrap_or_else(|| "Any".to_string())
+            }
+            _ => {
+                if args.iter().any(|arg| arg == "Any") {
+                    "Any".to_string()
+                } else {
+                    format!("{}[{}]", outer_name, args.join(", "))
+                }
+            }
+        };
+    }
+
+    let leaf = value
+        .trim_start_matches("dyn ")
+        .rsplit("::")
+        .next()
+        .unwrap_or(value)
+        .trim();
+    match leaf {
+        "bool" => "bool".to_string(),
+        "str" | "String" | "OsString" => "str".to_string(),
+        "usize" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32"
+        | "i64" | "i128" => "int".to_string(),
+        "f32" | "f64" => "float".to_string(),
+        "!" => "Any".to_string(),
+        _ if leaf
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_') =>
+        {
+            safe_python_identifier(leaf)
+        }
+        _ => "Any".to_string(),
+    }
+}
+
+fn split_type_arguments_top_level(value: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut start = 0usize;
+    let mut angle_depth = 0usize;
+    let mut round_depth = 0usize;
+    let mut square_depth = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            '(' => round_depth += 1,
+            ')' => round_depth = round_depth.saturating_sub(1),
+            '[' => square_depth += 1,
+            ']' => square_depth = square_depth.saturating_sub(1),
+            ',' if angle_depth == 0 && round_depth == 0 && square_depth == 0 => {
+                result.push(value[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push(value[start..].trim());
+    result.into_iter().filter(|part| !part.is_empty()).collect()
+}
+
+fn render_field(field: &crate::model::FieldIr, indent: &str) -> String {
+    let annotation = field
+        .annotation
+        .as_deref()
+        .map(render_rust_type)
+        .unwrap_or_else(|| "Any".to_string());
+    let comment = field
+        .annotation
+        .as_deref()
+        .filter(|raw| annotation == "Any" && !raw.trim().is_empty())
+        .map(|raw| format!("  # Rust type: {}", raw.replace('\n', " ")))
+        .unwrap_or_default();
+    format!(
+        "{indent}{}: {} = ...{}",
+        safe_python_identifier(&field.name),
+        annotation,
+        comment
+    )
+}
+
+fn render_function_body(
+    function: &crate::model::FunctionIr,
+    indent: &str,
+    inside_class: bool,
+) -> Vec<String> {
+    let body_indent = format!("{indent}    ");
+    let mut lines = Vec::new();
+
+    if inside_class && matches!(function.name.as_str(), "constructor" | "__init__") {
+        for param in &function.params {
+            if matches!(param.name.as_str(), "self" | "this" | "cls") {
+                continue;
+            }
+            let name = safe_python_identifier(&param.name);
+            lines.push(format!("{body_indent}self.{name} = {name}"));
+        }
+    }
+
+    let await_targets = function
+        .awaits
+        .iter()
+        .filter_map(|target| render_call_target(target))
+        .collect::<Vec<_>>();
+    for target in &await_targets {
+        lines.push(format!("{body_indent}await {target}"));
+    }
+
+    let raise_targets = function
+        .raises
+        .iter()
+        .filter_map(|target| render_call_target(target))
+        .collect::<Vec<_>>();
+    let raise_set = raise_targets.iter().collect::<HashSet<_>>();
+
+    let mut call_targets = Vec::new();
+    for target in &function.calls {
+        if let Some(rendered) = render_call_target(target)
+            && !await_targets.iter().any(|value| value == &rendered)
+            && !raise_set.contains(&rendered)
+            && !call_targets.contains(&rendered)
+        {
+            call_targets.push(rendered);
+        }
+    }
+    for (index, target) in call_targets.iter().enumerate() {
+        if function.returns.is_some() && index + 1 == call_targets.len() {
+            lines.push(format!("{body_indent}return {target}"));
+        } else {
+            lines.push(format!("{body_indent}{target}"));
+        }
+    }
+    for target in raise_targets {
+        lines.push(format!("{body_indent}raise {target}"));
+    }
+
+    if lines.is_empty() {
+        lines.push(format!("{body_indent}..."));
+    }
+    lines
+}
+
+fn render_function(
+    function: &crate::model::FunctionIr,
+    indent: &str,
+    inside_class: bool,
+) -> Vec<String> {
+    let is_static = function
+        .decorators
+        .iter()
+        .any(|decorator| decorator.trim_start_matches('@') == "staticmethod");
+    let mut params = function
+        .params
+        .iter()
+        .filter(|param| !matches!(param.name.as_str(), "self" | "this" | "cls"))
+        .map(|param| safe_python_identifier(&param.name))
+        .collect::<Vec<_>>();
+    if inside_class && !is_static {
+        params.insert(0, "self".to_string());
+    }
+    let prefix = if function.is_async { "async " } else { "" };
+    let mut lines = Vec::new();
+    if inside_class && is_static {
+        lines.push(format!("{indent}@staticmethod"));
+    }
+    lines.push(format!(
+        "{indent}{prefix}def {}({}):",
+        safe_python_identifier(&function.name),
+        params.join(", ")
+    ));
+    lines.extend(render_function_body(function, indent, inside_class));
+    lines
+}
+
+fn python_literal<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+fn render_module_summary(module: &ModuleIr) -> Vec<String> {
+    let mut lines = vec![
+        "__module_summary__: Any = {".to_string(),
+        format!("    \"source\": {},", python_literal(&module.relative_path)),
+        format!("    \"language\": {},", python_literal(&module.language)),
+        format!(
+            "    \"parse_mode\": {},",
+            python_literal(&module.parse_mode)
+        ),
+        format!("    \"source_lines\": {},", module.line_count),
+        format!("    \"source_bytes\": {},", module.source_bytes),
+        format!(
+            "    \"truncated\": {},",
+            if module.truncated { "True" } else { "False" }
+        ),
+        format!("    \"imports\": {},", python_literal(&module.imports)),
+        format!("    \"exports\": {},", python_literal(&module.exports)),
+    ];
+    if !module.notes.is_empty() {
+        lines.push(format!("    \"notes\": {},", python_literal(&module.notes)));
+    }
+    if !module.errors.is_empty() {
+        lines.push(format!(
+            "    \"errors\": {},",
+            python_literal(&module.errors)
+        ));
+    }
+    lines.push("}".to_string());
+    lines
 }
 
 fn write_skeletons(output_dir: &Path, modules: &[ModuleIr]) -> Result<()> {
     let skeleton_dir = output_dir.join("skeleton");
     fs::create_dir_all(&skeleton_dir)?;
+    let mut used_paths = HashSet::new();
     for module in modules {
-        let relative = skeleton_relative_path(&module.relative_path);
+        let relative = skeleton_relative_path(&module.relative_path, &mut used_paths);
         let target = skeleton_dir.join(relative);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut lines = Vec::new();
-        lines.push(format!("# source: {}", module.relative_path));
-        lines.push(format!("# language: {}", module.language));
-        lines.push(String::new());
+        let mut lines = vec![
+            "from __future__ import annotations".to_string(),
+            "from typing import Any".to_string(),
+            String::new(),
+            format!("# source: {}", module.relative_path),
+            format!("# language: {}", module.language),
+            format!("# parse mode: {}", module.parse_mode),
+            format!("# source lines: {}", module.line_count),
+            String::new(),
+        ];
         for import in &module.imports {
             lines.push(format!("# import {}", import));
         }
@@ -482,46 +861,90 @@ fn write_skeletons(output_dir: &Path, modules: &[ModuleIr]) -> Result<()> {
             lines.push(String::new());
         }
         for class in &module.classes {
-            lines.push(format!("class {}:", safe_python_identifier(&class.name)));
-            if class.methods.is_empty() {
-                lines.push("    pass".to_string());
+            let bases = class
+                .bases
+                .iter()
+                .map(|base| safe_python_identifier(base))
+                .filter(|base| !base.is_empty())
+                .collect::<Vec<_>>();
+            if bases.is_empty() {
+                lines.push(format!("class {}:", safe_python_identifier(&class.name)));
             } else {
-                for method in &class.methods {
-                    lines.push(format!(
-                        "    def {}({}): ...",
-                        safe_python_identifier(&method.name),
-                        method
-                            .params
-                            .iter()
-                            .map(|param| safe_python_identifier(&param.name))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
+                lines.push(format!(
+                    "class {}({}):",
+                    safe_python_identifier(&class.name),
+                    bases.join(", ")
+                ));
+            }
+            let mut has_body = false;
+            for field in &class.fields {
+                lines.push(render_field(field, "    "));
+                has_body = true;
+            }
+            if !class.fields.is_empty() && !class.methods.is_empty() {
+                lines.push(String::new());
+            }
+            if class.methods.is_empty() && !has_body {
+                lines.push("    ...".to_string());
+            } else {
+                for (index, method) in class.methods.iter().enumerate() {
+                    if index > 0 && (class.fields.is_empty() || index > 0) {
+                        lines.push(String::new());
+                    }
+                    lines.extend(render_function(method, "    ", true));
                 }
             }
             lines.push(String::new());
         }
-        for function in &module.functions {
-            lines.push(format!(
-                "def {}({}): ...",
-                safe_python_identifier(&function.name),
-                function
-                    .params
-                    .iter()
-                    .map(|param| safe_python_identifier(&param.name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if module.classes.is_empty() && module.functions.is_empty() {
-            if !module.exports.is_empty() {
-                lines.push("# exports:".to_string());
-                for exp in &module.exports {
-                    lines.push(format!("def {}(...): ...", safe_python_identifier(exp)));
-                }
-            } else {
-                lines.push("# no indexed symbols".to_string());
+        for (index, function) in module.functions.iter().enumerate() {
+            if index > 0 {
+                lines.push(String::new());
             }
+            lines.extend(render_function(function, "", false));
+        }
+        let represented = module
+            .classes
+            .iter()
+            .map(|class| class.name.as_str())
+            .chain(
+                module
+                    .classes
+                    .iter()
+                    .flat_map(|class| class.methods.iter().map(|method| method.name.as_str())),
+            )
+            .chain(
+                module
+                    .functions
+                    .iter()
+                    .map(|function| function.name.as_str()),
+            )
+            .collect::<HashSet<_>>();
+        let extra_exports = module
+            .exports
+            .iter()
+            .filter(|export| !represented.contains(export.as_str()))
+            .map(|export| safe_python_identifier(export))
+            .collect::<Vec<_>>();
+        if !extra_exports.is_empty() {
+            if !lines.last().is_some_and(|line| line.is_empty()) {
+                lines.push(String::new());
+            }
+            for export in &extra_exports {
+                lines.push(format!("{export}: Any = ..."));
+            }
+        }
+
+        if module.classes.is_empty() && module.functions.is_empty() && extra_exports.is_empty() {
+            for note in &module.notes {
+                lines.push(format!("# note: {note}"));
+            }
+            for error in &module.errors {
+                lines.push(format!("# error: {error}"));
+            }
+            if !lines.last().is_some_and(|line| line.is_empty()) {
+                lines.push(String::new());
+            }
+            lines.extend(render_module_summary(module));
         }
         fs::write(target, lines.join("\n") + "\n")?;
     }
@@ -712,4 +1135,179 @@ pub fn write_index(
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ClassIr, FieldIr, FunctionIr, ParamIr, SourceLineRange};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn module(path: &str) -> ModuleIr {
+        ModuleIr {
+            module_id: path.to_string(),
+            source_path: format!("/repo/{path}"),
+            relative_path: path.to_string(),
+            origin_path: None,
+            origin_start_character: None,
+            origin_start_line: None,
+            language: "typescript".to_string(),
+            parse_mode: "rs-pattern-typescript".to_string(),
+            imports: Vec::new(),
+            import_stubs: Vec::new(),
+            exports: vec!["TypeOnly".to_string()],
+            classes: Vec::new(),
+            functions: Vec::new(),
+            notes: Vec::new(),
+            errors: Vec::new(),
+            source_bytes: 10,
+            line_count: 2,
+            truncated: false,
+        }
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "code-index-rs-writer-test-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn disambiguates_same_stem_skeleton_paths_and_renders_exports() {
+        let output_dir = temp_dir();
+        fs::create_dir_all(&output_dir).expect("create test output");
+
+        let modules = vec![module("src/types.rs"), module("src/types.ts")];
+        write_skeletons(&output_dir, &modules).expect("write skeletons");
+
+        let first = fs::read_to_string(output_dir.join("skeleton/src/types.py"))
+            .expect("read first skeleton");
+        let second = fs::read_to_string(output_dir.join("skeleton/src/types__types_ts.py"))
+            .expect("read disambiguated skeleton");
+        assert!(first.contains("# source: src/types.rs"));
+        assert!(second.contains("# source: src/types.ts"));
+        assert!(second.contains("TypeOnly: Any = ..."));
+
+        fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn renders_calls_in_function_bodies() {
+        let function = FunctionIr {
+            kind: "function".to_string(),
+            name: "build".to_string(),
+            qualified_name: "scripts/build.sh::build".to_string(),
+            params: vec![ParamIr {
+                name: "target".to_string(),
+                annotation: None,
+                default_value: None,
+            }],
+            returns: Some("Result".to_string()),
+            decorators: Vec::new(),
+            calls: vec!["prepare".to_string(), "archive::write".to_string()],
+            awaits: Vec::new(),
+            raises: Vec::new(),
+            is_async: false,
+            is_public: true,
+            exported: true,
+            source_lines: SourceLineRange { start: 1, end: 4 },
+            origin_path: None,
+        };
+
+        let rendered = render_function(&function, "", false).join("\n");
+        assert!(rendered.contains("def build(target):"));
+        assert!(rendered.contains("prepare(...)"));
+        assert!(rendered.contains("return archive.write(...)"));
+    }
+
+    #[test]
+    fn renders_metadata_summary_for_modules_without_declarations() {
+        let output_dir = temp_dir();
+        fs::create_dir_all(&output_dir).expect("create test output");
+
+        let mut empty = module("src/empty.rs");
+        empty.exports.clear();
+        empty.imports = vec!["crate::runtime".to_string()];
+        empty.notes = vec!["heuristic parser".to_string()];
+        write_skeletons(&output_dir, &[empty]).expect("write skeleton");
+
+        let skeleton = fs::read_to_string(output_dir.join("skeleton/src/empty.py"))
+            .expect("read empty skeleton");
+        assert!(skeleton.contains("__module_summary__: Any = {"));
+        assert!(skeleton.contains("\"source\": \"src/empty.rs\""));
+        assert!(skeleton.contains("\"imports\": [\"crate::runtime\"]"));
+        assert!(!skeleton.contains("# no indexed symbols"));
+
+        fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn renders_struct_fields_and_attached_impl_methods() {
+        let output_dir = temp_dir();
+        fs::create_dir_all(&output_dir).expect("create test output");
+
+        let mut wine = module("src/wine.rs");
+        wine.exports = vec!["Wine".to_string(), "new".to_string()];
+        wine.classes = vec![ClassIr {
+            name: "Wine".to_string(),
+            qualified_name: "src/wine.rs::Wine".to_string(),
+            bases: Vec::new(),
+            depends_on: Vec::new(),
+            fields: vec![
+                FieldIr {
+                    name: "prefix".to_string(),
+                    annotation: Some("Option<TempDir>".to_string()),
+                    default_value: None,
+                    is_public: false,
+                },
+                FieldIr {
+                    name: "ready".to_string(),
+                    annotation: Some("bool".to_string()),
+                    default_value: None,
+                    is_public: true,
+                },
+            ],
+            methods: vec![FunctionIr {
+                kind: "method".to_string(),
+                name: "new".to_string(),
+                qualified_name: "src/wine.rs::Wine.new".to_string(),
+                params: vec![ParamIr {
+                    name: "prefix".to_string(),
+                    annotation: Some("Option<TempDir>".to_string()),
+                    default_value: None,
+                }],
+                returns: Some("Self".to_string()),
+                decorators: vec!["staticmethod".to_string()],
+                calls: Vec::new(),
+                awaits: Vec::new(),
+                raises: Vec::new(),
+                is_async: false,
+                is_public: true,
+                exported: true,
+                source_lines: SourceLineRange { start: 1, end: 5 },
+                origin_path: None,
+            }],
+            exported: true,
+            source_lines: SourceLineRange { start: 1, end: 10 },
+            origin_path: None,
+            impl_target: None,
+        }];
+
+        write_skeletons(&output_dir, &[wine]).expect("write skeleton");
+        let skeleton =
+            fs::read_to_string(output_dir.join("skeleton/src/wine.py")).expect("read skeleton");
+        assert!(skeleton.contains("class Wine:"));
+        assert!(skeleton.contains("prefix: TempDir | None = ..."));
+        assert!(skeleton.contains("ready: bool = ..."));
+        assert!(skeleton.contains("@staticmethod"));
+        assert!(skeleton.contains("def new(prefix):"));
+        assert!(!skeleton.contains("class impl_"));
+
+        fs::remove_dir_all(output_dir).expect("remove test output");
+    }
 }

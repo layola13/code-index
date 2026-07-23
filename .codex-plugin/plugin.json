@@ -1,6 +1,6 @@
 {
   "name": "code-index",
-  "version": "0.1.1+codex.20260717075640",
+  "version": "0.1.1+codex.20260723041013",
   "description": "Standalone Bun+TS code index plugin, MCP server, and lifecycle hooks.",
   "author": {
     "name": "Codex"

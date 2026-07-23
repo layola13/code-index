@@ -51,17 +51,33 @@ It uses:
 
 - `ignore` for gitignore-aware parallel discovery
 - `rayon` for concurrent source parsing
-- heuristic language parsers for Rust, TypeScript/JavaScript, Python, C/C++, Go,
-  Java, Zig, OCaml, Haxe, SAASM, and generic source files
+- heuristic language parsers for Rust, TypeScript/JavaScript, Python, Shell,
+  C/C++, Go, Java, Zig, OCaml, Haxe, SAASM, and generic source files
 
 For Rust files it extracts:
 
 - `use` and `mod` imports
 - top-level `fn`
-- `struct`, `enum`, `trait`
-- `impl` blocks as skeleton classes
-- methods inside `impl`
+- `struct`, `enum`, `trait`, including named and tuple fields
+- `impl` blocks merged back into their target type (including trait impls)
+- methods inside `impl`, including generic and async signatures
 - lightweight call edges
+
+For TypeScript/JavaScript it also recovers exported classes, interfaces, enums,
+type aliases, re-export names, and arrow functions. Shell files (`.sh`, `.bash`,
+and `.zsh`) recover function declarations, sourced files, top-level variables,
+and command-style call hints. Rust and Python multi-line function signatures are
+joined before parsing, while module-level imports, re-exports, constants, type
+aliases, macros, `__all__` entries, and assignments remain visible as navigation
+placeholders.
+
+Skeleton output is a Python navigation representation for every source language.
+It includes source metadata, class fields, inherited/implemented bases, static
+associated functions, constructor assignments, lightweight call/await/raise stubs,
+export-only placeholders, and deterministic disambiguation
+when two source files would otherwise map to the same `.py` skeleton path. A
+declaration-free source file receives a valid `__module_summary__` instead of a
+`# no indexed symbols` marker.
 
 This is intentionally faster and less syntax-complete than tree-sitter. The next
 step for parity is adding optional tree-sitter parsing for high-value languages

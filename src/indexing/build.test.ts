@@ -3,7 +3,10 @@ import { existsSync } from "fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { buildCodeIndex, buildCodeIndexWithDiscovery } from "./build.js";
+import {
+  buildCodeIndex as buildCodeIndexImpl,
+  buildCodeIndexWithDiscovery,
+} from "./build.js";
 import type { DiscoveredSourceFile } from "./discovery.js";
 import { formatCountSummary } from "./indexWriter.js";
 import type { ModuleIR } from "./ir.js";
@@ -12,6 +15,15 @@ import webpack from "webpack";
 import { build as esbuildBuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { minify } from "terser";
+
+async function buildCodeIndex(
+  options: Parameters<typeof buildCodeIndexImpl>[0] = {},
+): ReturnType<typeof buildCodeIndexImpl> {
+  // Bun 1.3.14 can crash in native tree-sitter worker teardown when an entire
+  // test file creates several pools. The production worker-pool tests live in
+  // parseWorkerPool.test.ts; keep this integration suite on the inline path.
+  return buildCodeIndexImpl({ ...options, workers: 1 });
+}
 
 async function buildWebpackFixture(args: {
   rootDir: string;
@@ -209,6 +221,109 @@ async function createExternalBundleStrategyPluginPackage(): Promise<{
 }
 
 describe("buildCodeIndex", () => {
+  it("keeps export-only and shell modules visible in skeletons", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-skeleton-quality-"));
+
+    try {
+      await writeFile(
+        join(rootDir, "types.ts"),
+        "export type Alias = string\n",
+        "utf8",
+      );
+      await writeFile(
+        join(rootDir, "build.sh"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          "",
+          "usage() {",
+          "  printf '%s\\n' usage",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const outputDir = join(rootDir, ".code_index");
+      await buildCodeIndex({ rootDir, outputDir, workers: 1 });
+
+      const typeSkeleton = await readFile(
+        join(outputDir, "skeleton", "types.py"),
+        "utf8",
+      );
+      expect(typeSkeleton).toContain("Alias: Any = ...");
+
+      const shellSkeleton = await readFile(
+        join(outputDir, "skeleton", "build.py"),
+        "utf8",
+      );
+      expect(shellSkeleton).toContain("def usage(");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a searchable summary for modules without declarations", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-module-summary-"));
+
+    try {
+      await writeFile(
+        join(rootDir, "empty.ts"),
+        "// Intentionally contains no declarations.\n",
+        "utf8",
+      );
+
+      const outputDir = join(rootDir, ".code_index");
+      await buildCodeIndex({ rootDir, outputDir, workers: 1 });
+
+      const skeleton = await readFile(
+        join(outputDir, "skeleton", "empty.py"),
+        "utf8",
+      );
+      expect(skeleton).toContain("__module_summary__: Any = {");
+      expect(skeleton).toContain('"source": "empty.ts"');
+      expect(skeleton).not.toContain("# no indexed symbols");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Rust struct fields and impl methods together in TypeScript-engine skeletons", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-rust-class-skeleton-"));
+
+    try {
+      await writeFile(
+        join(rootDir, "lib.rs"),
+        [
+          "pub struct Worker {",
+          "  pub queue: Vec<String>,",
+          "  active: bool,",
+          "}",
+          "",
+          "impl Worker {",
+          "  pub fn new(queue: Vec<String>) -> Self { Self { queue, active: false } }",
+          "  pub fn run(&mut self) {}",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const outputDir = join(rootDir, ".code_index");
+      await buildCodeIndex({ rootDir, outputDir, engine: "typescript", workers: 1 });
+
+      const skeleton = await readFile(join(outputDir, "skeleton", "lib.py"), "utf8");
+      expect(skeleton).toContain("class Worker:");
+      expect(skeleton).toContain("queue: list[str] = ...");
+      expect(skeleton).toContain("active: bool = ...");
+      expect(skeleton).toContain("def new(");
+      expect(skeleton).toContain("def run(self");
+      expect(skeleton).not.toContain("class impl_Worker");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("stops quickly when aborted during progress updates", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "claude-code-index-abort-"));
 
@@ -229,7 +344,9 @@ describe("buildCodeIndex", () => {
         buildCodeIndex({
           rootDir,
           outputDir: join(rootDir, ".code_index"),
-          workers: 2,
+          // Bun 1.3.14 can crash while tearing down multiple native
+          // tree-sitter workers after an aborted build.
+          workers: 1,
           onProgress: async () => {
             progressCalls++;
             if (progressCalls === 1) {

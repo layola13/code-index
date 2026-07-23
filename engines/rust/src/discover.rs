@@ -97,9 +97,9 @@ pub fn language_for_path(path: &Path) -> Option<&'static str> {
         (".php", "generic"),
         (".cs", "generic"),
         (".lua", "generic"),
-        (".bash", "generic"),
-        (".zsh", "generic"),
-        (".sh", "generic"),
+        (".bash", "shell"),
+        (".zsh", "shell"),
+        (".sh", "shell"),
     ];
     mappings
         .iter()

@@ -121,12 +121,19 @@ test('parseAstModule preserves AST structure for cpp, h, go, rust, java, haxe, a
     sourceText: [
       'use std::fmt;',
       '',
-      'pub struct S;',
+      'pub struct S {',
+      '  pub value: i32,',
+      '  items: Vec<String>,',
+      '}',
       '',
       'impl S {',
       '  pub fn foo(&self, x: i32) -> i32 {',
       '    x',
       '  }',
+      '}',
+      '',
+      'impl Drop for S {',
+      '  fn drop(&mut self) {}',
       '}',
       '',
       'pub fn top(y: i32) -> i32 {',
@@ -137,7 +144,9 @@ test('parseAstModule preserves AST structure for cpp, h, go, rust, java, haxe, a
   })
 
   expect(rust?.imports).toContain('use std::fmt;')
-  expect(rust?.classes[0]?.methods[0]?.name).toBe('foo')
+  expect(rust?.classes[0]?.fields?.map(field => field.name)).toEqual(['value', 'items'])
+  expect(rust?.classes[0]?.methods.map(method => method.name)).toEqual(['foo', 'drop'])
+  expect(rust?.classes[0]?.bases).toContain('Drop')
   expect(rust?.functions[0]?.name).toBe('top')
 
   const sla = parseAstModule({

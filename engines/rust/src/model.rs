@@ -26,6 +26,17 @@ pub struct ParamIr {
     pub default_value: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FieldIr {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<String>,
+    #[serde(rename = "defaultValue", skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(rename = "isPublic")]
+    pub is_public: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FunctionIr {
     pub kind: String,
@@ -58,12 +69,16 @@ pub struct ClassIr {
     pub bases: Vec<String>,
     #[serde(rename = "dependsOn")]
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<FieldIr>,
     pub methods: Vec<FunctionIr>,
     pub exported: bool,
     #[serde(rename = "sourceLines")]
     pub source_lines: SourceLineRange,
     #[serde(rename = "originPath", skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<String>,
+    #[serde(skip)]
+    pub impl_target: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
