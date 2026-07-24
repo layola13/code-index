@@ -44,7 +44,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'search',
     description:
-      'Search raw source text directly. Use this for code content, symbols in context, call sites, config values, log strings, implementation details, and multi-term pattern queries like A|B|C. Do not use it for filename-only fuzzy matching; use Codex file search for that. Use | for OR across terms and append "in <scope>" to restrict results to a repo-relative path prefix. Terms are treated as regex patterns. Optional filters include caseSensitive, contextLines, pathGlob, excludeGlob, language, and maxLinesPerFile.',
+      'Search raw source text directly. Use this for code content, symbols in context, call sites, config values, log strings, implementation details, and multi-term pattern queries like A|B|C. To minimize token usage, append "in <scope>" to restrict scope (e.g. "query in src/components") or set limit (default 10) and maxLinesPerFile (default 4). Do not use for filename-only fuzzy matching; use file search for that. Terms are regex patterns. Optional filters: caseSensitive, contextLines, pathGlob, excludeGlob, language, maxLinesPerFile.',
     inputSchema: {
       type: 'object',
       properties: {

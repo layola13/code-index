@@ -18,7 +18,7 @@ export type ParsedSourceSearchQuery = {
 
 export type SourceSearchLineMatch = {
   line: number
-  context: Array<{
+  context?: Array<{
     line: number
     text: string
   }>
@@ -61,9 +61,9 @@ export type SourceSearchOptions = {
   signal?: AbortSignal
 }
 
-const DEFAULT_SOURCE_SEARCH_LIMIT = 25
-const DEFAULT_SOURCE_SEARCH_LINE_LIMIT = 8
-const SOURCE_SNIPPET_WIDTH = 220
+const DEFAULT_SOURCE_SEARCH_LIMIT = 10
+const DEFAULT_SOURCE_SEARCH_LINE_LIMIT = 4
+const SOURCE_SNIPPET_WIDTH = 160
 
 function clampLimit(limit: number | undefined, defaultLimit: number): number {
   if (!Number.isFinite(limit) || !limit || limit < 1) {
@@ -355,6 +355,9 @@ function buildContextWindow(args: {
   line: number
   text: string
 }> {
+  if (args.contextLines <= 0) {
+    return []
+  }
   const startLine = Math.max(1, args.matchedLine - args.contextLines)
   const endLine = Math.min(args.lines.length, args.matchedLine + args.contextLines)
   const context: Array<{ line: number; text: string }> = []
@@ -387,14 +390,17 @@ function finalizeLineHit(hit: {
     text: string
   }>
 }): SourceSearchLineMatch {
-  return {
+  const res: SourceSearchLineMatch = {
     line: hit.line,
-    context: hit.context,
     matchedTerms: [...hit.matchedTerms].sort((left, right) =>
       left.localeCompare(right),
     ),
     snippet: hit.snippet,
   }
+  if (hit.context && hit.context.length > 0) {
+    res.context = hit.context
+  }
+  return res
 }
 
 export async function searchSourceFiles(
