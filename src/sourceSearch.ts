@@ -447,7 +447,12 @@ export async function searchSourceFiles(
       continue
     }
 
-    const text = await readSourceTextForSearch(file.absolutePath)
+    let text: string
+    try {
+      text = await readSourceTextForSearch(file.absolutePath)
+    } catch {
+      continue
+    }
     options.signal?.throwIfAborted?.()
     const lineStarts = computeLineStarts(text)
     const sourceLines = text.split('\n')

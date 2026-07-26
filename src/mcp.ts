@@ -707,45 +707,45 @@ export async function startMcpServer(): Promise<void> {
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra): Promise<CallToolResult> => {
     const { name, arguments: args } = params
-    logLifecycle('tool-start', `${name} request=${String(extra.requestId)}`)
+    logLifecycle('tool-start', `${name} request=${String(extra?.requestId)}`)
 
     try {
       switch (name) {
         case 'search':
-          return await handleSearch(args, extra.signal)
+          return await handleSearch(args, extra?.signal)
         case 'search-history':
-          return await handleSearchHistory(args, extra.signal)
+          return await handleSearchHistory(args, extra?.signal)
         case 'build-index':
-          return await handleBuildIndex(args, extra.signal)
+          return await handleBuildIndex(args, extra?.signal)
         case 'read-artifact':
-          return await handleReadArtifact(args, extra.signal)
+          return await handleReadArtifact(args, extra?.signal)
         case 'search-modules':
-          return await handleSearchModules(args, extra.signal)
+          return await handleSearchModules(args, extra?.signal)
         case 'search-symbols':
-          return await handleSearchSymbols(args, extra.signal)
+          return await handleSearchSymbols(args, extra?.signal)
         case 'search-edges':
-          return await handleSearchEdges(args, extra.signal)
+          return await handleSearchEdges(args, extra?.signal)
         case 'get-symbol-source':
-          return await handleGetSymbolSource(args, extra.signal)
+          return await handleGetSymbolSource(args, extra?.signal)
         case 'list-skeletons':
-          return await handleListSkeletons(args, extra.signal)
+          return await handleListSkeletons(args, extra?.signal)
         case 'read-skeleton':
-          return await handleReadSkeleton(args, extra.signal)
+          return await handleReadSkeleton(args, extra?.signal)
         case 'describe-index':
-          return await handleDescribeIndex(args, extra.signal)
+          return await handleDescribeIndex(args, extra?.signal)
         default:
           return errorResult(`Unknown tool: ${name}`)
       }
     } catch (error) {
       const reason = errorMessage(error)
-      if (extra.signal.aborted) {
+      if (extra?.signal?.aborted) {
         logLifecycle('tool-cancelled', `${name} ${reason}`)
       } else {
         logLifecycle('tool-failed', `${name} ${reason}`)
       }
       return errorResult(reason)
     } finally {
-      logLifecycle('tool-finish', `${name} aborted=${extra.signal.aborted}`)
+      logLifecycle('tool-finish', `${name} aborted=${Boolean(extra?.signal?.aborted)}`)
     }
   })
 
